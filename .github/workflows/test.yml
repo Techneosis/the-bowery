@@ -1,0 +1,23 @@
+name: test
+on: [push, pull_request]
+jobs:
+  test:
+    strategy:
+      # one platform failing shouldn't cancel the other's answer
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: go vet ./...
+      - run: CGO_ENABLED=0 go build -trimpath -o build/bowery ./cmd/bowery
+      # Black-box: the built binary through its CLI, against the fake herdr
+      # and ssh in tests/fakes/ (no herdr needed on the runner).
+      - run: BOWERY_BIN=$PWD/build/bowery python -m unittest discover -v tests

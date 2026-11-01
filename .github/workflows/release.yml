@@ -1,0 +1,107 @@
+name: release
+
+# A pushed v* tag builds every target, verifies the archives on real Linux and
+# macOS machines, and only then publishes the GitHub release. Run it by hand
+# (Actions > release > Run workflow) for a dry run: everything but the publish.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "version to stamp into the dry-run build"
+        default: "v0.0.0-dryrun"
+
+permissions:
+  contents: write
+
+env:
+  VERSION: ${{ github.ref_type == 'tag' && github.ref_name || inputs.version }}
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - run: go test ./...
+      - run: scripts/package.sh "$VERSION" dist
+      # darwin/amd64 has no runner below to execute it on; check it is the
+      # right kind of binary at least.
+      - run: |
+          tar -xzf dist/bowery-darwin-amd64.tar.gz -C /tmp
+          file /tmp/bowery-darwin-amd64/build/bowery | tee /dev/stderr | grep -q 'Mach-O 64-bit x86_64'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  verify:
+    needs: package
+    strategy:
+      matrix:
+        include:
+          - { runner: ubuntu-latest, platform: linux-amd64 }
+          - { runner: ubuntu-24.04-arm, platform: linux-arm64 }
+          - { runner: macos-latest, platform: darwin-arm64 }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      - name: checksums
+        run: cd dist && { sha256sum -c SHA256SUMS 2>/dev/null || shasum -a 256 -c SHA256SUMS; }
+      - name: the archive's own binary, at the right version
+        run: |
+          tar -xzf dist/bowery-${{ matrix.platform }}.tar.gz -C "$RUNNER_TEMP"
+          "$RUNNER_TEMP/bowery-${{ matrix.platform }}/build/bowery" version | tee /dev/stderr | grep -qF "$VERSION"
+      - name: the conformance suite, against the released binary
+        run: BOWERY_BIN="$RUNNER_TEMP/bowery-${{ matrix.platform }}/build/bowery" python -m unittest discover -v tests
+      # The one-liner, end to end, from these archives: download, checksum,
+      # unpack, install, upgrade, uninstall, in a throwaway HOME.
+      - name: install the way a user does
+        run: |
+          export HOME="$RUNNER_TEMP/home"; mkdir -p "$HOME"
+          mkdir -p "$RUNNER_TEMP/releases/latest/download"
+          cp dist/* "$RUNNER_TEMP/releases/latest/download/"
+          export BOWERY_RELEASES="file://$RUNNER_TEMP/releases"
+          bash -s -- --no-claude < install.sh
+          ~/.local/bin/bowery version | grep -qF "$VERSION"
+          ~/.local/bin/bowery upgrade --check
+          ~/.local/bin/bowery upgrade | grep -q "already up to date"
+          echo v99.0.0 > "$RUNNER_TEMP/releases/latest/download/VERSION"
+          rc=0; ~/.local/bin/bowery upgrade --check || rc=$?; test "$rc" -eq 3
+          ~/.local/bin/bowery upgrade | tee "$RUNNER_TEMP/upgrade.log"
+          test "${PIPESTATUS[0]}" -eq 0
+          grep -q "upgrading from $VERSION to v99.0.0" "$RUNNER_TEMP/upgrade.log"
+          grep -q "checksum ok" "$RUNNER_TEMP/upgrade.log"
+          bash -s -- --uninstall < install.sh
+          ! test -e ~/.local/bin/bowery
+
+  publish:
+    needs: verify
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      - name: publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          notes=(--generate-notes)
+          if [ -f "docs/releases/$VERSION.md" ]; then notes=(--notes-file "docs/releases/$VERSION.md"); fi
+          pre=()
+          case "$VERSION" in *-*) pre=(--prerelease) ;; esac
+          gh release create "$VERSION" dist/* --verify-tag --title "Bowery $VERSION" "${notes[@]}" "${pre[@]}"

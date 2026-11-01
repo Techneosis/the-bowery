@@ -1,0 +1,30 @@
+# ~/.config/bowery/config.toml — every key is optional; `bowery config` shows
+# what is in force. These are the defaults, plus one example machine.
+
+# The workspace dispatched agents get a tab in by default.
+swarm = "swarm"
+
+# The pane-metadata source the sound=off token is reported under. A sound
+# plugin reads the token (sound=off); the source only says who set it.
+sound_source = "bowery.sound"
+
+# Claude's "trust this folder?" dialog is answered Yes under these, and always
+# under the herdr worktrees dir. ~ is the home of the machine the pane is on.
+trust_roots = ["~/dev"]
+
+# Short names for --model. Anything not listed is passed through as written.
+[models]
+# fast = "claude-haiku-4-5"
+
+# A saved herdr machine (`herdr machine list`), by its label.
+[machines.swarm-box]
+# Runs things as a person on the box: `<cmd> <who>` is their shell,
+# `<cmd> <who> <argv...>` runs argv as them, and both export identity_env=<who>.
+# With it, --as is required for this machine; without it, --as is refused.
+# Use a full path: a non-login ssh session has a short PATH.
+identity_command = "~/bin/as"
+identity_env = "BOWERY_AS"
+# The ssh destination for git and file checks (default: the profile's target).
+# ssh = "swarm-box"
+# Trust roots on the box (default: the top-level trust_roots).
+# trust_roots = ["~/dev", "~/src"]
