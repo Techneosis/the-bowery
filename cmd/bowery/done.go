@@ -1,0 +1,709 @@
+package main
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"strings"
+	"time"
+)
+
+type doneOpts struct{ force, keepWorktree, keepBranch, dryRun bool }
+
+// findTarget resolves a name or pane id to its record, live agent and pane.
+func findTarget(target string) (*Record, *Agent, *Pane, error) {
+	var rec *Record
+	if !strings.Contains(target, "/") {
+		rec = loadRecord(target)
+	}
+	ags, err := agents()
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	ps, err := panes()
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	var agent *Agent
+	for i := range ags {
+		if ags[i].Name == target || ags[i].PaneID == target {
+			agent = &ags[i]
+			break
+		}
+	}
+	paneBy := func(match func(Pane) bool) *Pane {
+		for i := range ps {
+			if match(ps[i]) {
+				return &ps[i]
+			}
+		}
+		return nil
+	}
+	var pane *Pane
+	switch {
+	case agent != nil:
+		pane = paneBy(func(p Pane) bool { return p.PaneID == agent.PaneID })
+	case rec != nil:
+		// The agent may have exited back to a shell, or the pane been moved:
+		// terminal_id survives both, pane_id does not.
+		if rec.TerminalID != "" {
+			pane = paneBy(func(p Pane) bool { return p.TerminalID == rec.TerminalID })
+		}
+	case strings.Contains(target, ":"):
+		pane = paneBy(func(p Pane) bool { return p.PaneID == target })
+	}
+	if pane != nil && agent == nil {
+		for i := range ags {
+			if ags[i].PaneID == pane.PaneID {
+				agent = &ags[i]
+				break
+			}
+		}
+	}
+	if rec == nil && agent != nil && agent.Name != "" {
+		rec = loadRecord(agent.Name)
+	}
+	return rec, agent, pane, nil
+}
+
+func occupants(path string, ps []Pane, except map[string]bool) []Pane {
+	var out []Pane
+	for _, p := range ps {
+		if except[p.PaneID] {
+			continue
+		}
+		if (p.Cwd != "" && under(p.Cwd, path)) || (p.ForegroundCwd != "" && under(p.ForegroundCwd, path)) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+type container struct {
+	kind, id, label string
+	ws              Workspace
+	panes           []Pane
+}
+
+// ownedContainer is the tab/workspace bowery made for rec's agent, if it is
+// still open. Checked by label as well as id, so a tab someone renamed or an
+// id herdr reused is never taken for it.
+func ownedContainer(rec *Record, ps []Pane, all []Workspace) *container {
+	o := recOwns(rec)
+	if o == nil {
+		return nil
+	}
+	wsByID := func(id string) *Workspace {
+		for i := range all {
+			if all[i].WorkspaceID == id {
+				return &all[i]
+			}
+		}
+		return nil
+	}
+	if o.Kind == "workspace" {
+		ws := wsByID(o.ID)
+		if ws == nil || ws.Label != rec.Name {
+			return nil
+		}
+		c := &container{kind: "workspace", id: ws.WorkspaceID, label: ws.Label, ws: *ws}
+		for _, p := range ps {
+			if p.WorkspaceID == ws.WorkspaceID {
+				c.panes = append(c.panes, p)
+			}
+		}
+		return c
+	}
+	var r struct{ Tab Tab }
+	if herdr(&r, "tab", "get", o.ID) != nil || r.Tab.Label != rec.Name {
+		return nil
+	}
+	ws := wsByID(r.Tab.WorkspaceID)
+	if ws == nil {
+		return nil
+	}
+	c := &container{kind: "tab", id: r.Tab.TabID, label: r.Tab.Label, ws: *ws}
+	for _, p := range ps {
+		if p.TabID == r.Tab.TabID {
+			c.panes = append(c.panes, p)
+		}
+	}
+	return c
+}
+
+func paneDesc(p Pane) string {
+	what := ""
+	if p.Agent != "" {
+		what = strings.TrimSpace(p.Agent + " agent " + p.AgentStatus)
+	}
+	if what == "" {
+		what = p.Title
+	}
+	if what == "" {
+		what = "a running process"
+	}
+	return fmt.Sprintf("%s (%s)", p.PaneID, what)
+}
+
+// cascadeRisk says why closing this whole workspace would take others with
+// it, or "".
+func cascadeRisk(ws Workspace, all []Workspace) string {
+	if !isPrimary(ws) {
+		return ""
+	}
+	linked := linkedSiblings(ws, all)
+	if len(linked) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%s (%s) is the herdr group primary of %d open worktree workspace(s) (%s); closing it would close them too",
+		ws.WorkspaceID, ws.Label, len(linked), labels(linked))
+}
+
+// closeContainer closes an owned tab (its workspace too, when it is the last
+// tab) or workspace.
+func closeContainer(c *container, dryRun bool) (string, error) {
+	n := len(c.panes)
+	if c.kind == "tab" && c.ws.TabCount > 1 {
+		if !dryRun {
+			if err := herdr(nil, "tab", "close", c.id); err != nil {
+				return "", err
+			}
+		}
+		return fmt.Sprintf("closed tab %s (%s) with %d pane(s)", c.id, c.label, n), nil
+	}
+	if !dryRun {
+		if err := herdr(nil, "workspace", "close", c.ws.WorkspaceID); err != nil { // refuses for a primary with siblings
+			return "", err
+		}
+	}
+	if c.kind == "tab" {
+		return fmt.Sprintf("closed tab %s (%s) with %d pane(s), and its workspace %s (%s)", c.id, c.label, n, c.ws.WorkspaceID, c.ws.Label), nil
+	}
+	return fmt.Sprintf("closed workspace %s (%s) with %d pane(s)", c.ws.WorkspaceID, c.ws.Label, n), nil
+}
+
+type plannedWT struct {
+	info          wtInfo
+	merge, target string
+}
+
+func doneOne(target string, o doneOpts) error {
+	pfx := ""
+	if o.dryRun {
+		pfx = "[dry-run] "
+	}
+	isPath := strings.Contains(target, "/")
+	var rec *Record
+	var agent *Agent
+	var pane *Pane
+	if !isPath {
+		var err error
+		if rec, agent, pane, err = findTarget(target); err != nil {
+			return err
+		}
+	}
+	ps, err := panes()
+	if err != nil {
+		return err
+	}
+	all, err := workspaces()
+	if err != nil {
+		return err
+	}
+	ags, err := agents()
+	if err != nil {
+		return err
+	}
+	var cont *container
+	if rec != nil {
+		cont = ownedContainer(rec, ps, all)
+	}
+	if !isPath && rec == nil && agent == nil && pane == nil {
+		say("%s: nothing to tear down (no live agent, pane or dispatch record)", target)
+		return nil
+	}
+
+	// ---- checks; nothing is changed until all of them pass
+	closing := map[string]bool{}
+	inContainer := map[string]bool{}
+	if cont != nil {
+		for _, p := range cont.panes {
+			closing[p.PaneID], inContainer[p.PaneID] = true, true
+		}
+	}
+	if pane != nil {
+		closing[pane.PaneID] = true
+	}
+	if cp := callerPane(); cp != "" && closing[cp] {
+		return refuse("%s: %s is the pane you are running in, and done would close it", target, cp)
+	}
+	if agent != nil && (agent.AgentStatus == "working" || agent.AgentStatus == "blocked") && !o.force {
+		hint := ""
+		if agent.AgentStatus == "blocked" {
+			hint = " — `herdr agent read` it"
+		}
+		return refuse("%s is still %s%s; --force to tear it down anyway", target, agent.AgentStatus, hint)
+	}
+	if cont != nil {
+		// Everything in the agent's own tab/workspace is the agent's; close it
+		// all, but not a pane still running something unless told to.
+		var busy []string
+		for _, p := range cont.panes {
+			if (pane == nil || p.PaneID != pane.PaneID) && !paneIsBlankShell(p) {
+				busy = append(busy, paneDesc(p))
+			}
+		}
+		if len(busy) > 0 && !o.force {
+			return refuse("%s's %s %s also holds %s, not an idle shell prompt; stop it, or --force to close it too",
+				target, cont.kind, cont.id, strings.Join(busy, ", "))
+		}
+		if cont.kind == "workspace" || cont.ws.TabCount == 1 {
+			if risk := cascadeRisk(cont.ws, all); risk != "" {
+				return refuse("%s: %s. Tear those down first.", target, risk)
+			}
+		}
+	}
+
+	var wts []wtInfo
+	var paths []string
+	if isPath {
+		paths = []string{target}
+	} else {
+		for _, w := range recWorktrees(rec) {
+			paths = append(paths, w.Path)
+		}
+	}
+	if len(paths) == 0 && pane != nil {
+		root, err := worktreeRoot()
+		if err != nil {
+			return err
+		}
+		for _, c := range []string{pane.ForegroundCwd, pane.Cwd} {
+			if c == "" {
+				continue
+			}
+			info, err := worktreeInfo(c)
+			if err != nil {
+				return err
+			}
+			if info != nil && under(info.top, root) {
+				paths = []string{info.top}
+				break
+			}
+		}
+	}
+	for _, wp := range paths {
+		info, err := worktreeInfo(wp)
+		if err != nil {
+			return err
+		}
+		switch {
+		case info != nil:
+			wts = append(wts, *info)
+		case isPath:
+			return refuse("%s is not a linked git worktree", target)
+		default:
+			say("%s: worktree %s already gone", target, wp)
+		}
+	}
+	if o.keepWorktree {
+		wts = nil
+	}
+
+	me := ""
+	if rec != nil {
+		me = rec.Name
+	}
+	claims := worktreeClaims(ags, ps)
+	var plan []plannedWT
+	for _, w := range wts {
+		var owners []string
+		for _, c := range claims[norm(w.top)] {
+			if c.live && c.name != me {
+				owners = append(owners, c.name)
+			}
+		}
+		if len(owners) > 0 {
+			return refuse("worktree %s belongs to live agent %s — `bowery done %s` tears it down with that agent",
+				w.top, strings.Join(owners, ", "), owners[0])
+		}
+		if others := occupants(w.top, ps, closing); len(others) > 0 {
+			ids := make([]string, len(others))
+			for i, p := range others {
+				ids[i] = p.PaneID
+			}
+			return refuse("worktree %s is still in use by %s — close those first, or pass --keep-worktree to close only this agent's pane",
+				w.top, strings.Join(ids, ", "))
+		}
+		ok, err := fetch(w.repo)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			warn("could not fetch origin in %s; checking against the last fetch", w.repo)
+		}
+		ref, err := defaultBranch(w.repo)
+		if err != nil {
+			return err
+		}
+		d, err := dirty(w.top, true)
+		if err != nil {
+			return err
+		}
+		if d && !o.force {
+			return refuse("worktree %s has uncommitted or untracked files; --force to discard them, --keep-worktree to leave it", w.top)
+		}
+		merge := ""
+		if ref != "" {
+			rev := w.branch
+			if rev == "" {
+				rev = "HEAD"
+			}
+			if merge, err = mergedInto(w.top, rev, ref); err != nil {
+				return err
+			}
+		}
+		if merge == "" && !o.force {
+			what := w.branch
+			if what == "" {
+				what = "HEAD of " + w.top
+			}
+			into := ref
+			if into == "" {
+				into = "any default branch"
+			}
+			return refuse("%s is not merged into %s; --force removes the checkout and keeps the branch, --keep-worktree leaves both", what, into)
+		}
+		plan = append(plan, plannedWT{w, merge, ref})
+	}
+
+	// ---- teardown
+	if cont != nil {
+		msg, err := closeContainer(cont, o.dryRun)
+		if err != nil {
+			return err
+		}
+		say("%s%s: %s", pfx, target, msg)
+	}
+	switch {
+	case pane != nil && !inContainer[pane.PaneID]:
+		msg, err := safeClosePane(pane.PaneID, o.dryRun)
+		if err != nil {
+			return err
+		}
+		say("%s%s: %s", pfx, target, msg)
+	case pane == nil && cont == nil && agent == nil && !isPath:
+		say("%s: pane already gone", target)
+	}
+
+	var repos []string
+	for _, p := range plan {
+		w := p.info
+		if !o.dryRun {
+			// The pane's shell can outlive the close by a moment.
+			for i := 0; i < 20; i++ {
+				now, err := panes()
+				if err != nil || len(occupants(w.top, now, nil)) == 0 {
+					break
+				}
+				time.Sleep(250 * time.Millisecond)
+			}
+			args := []string{"worktree", "remove"}
+			if o.force {
+				args = append(args, "--force")
+			}
+			if _, err := git(w.repo, append(args, w.top)...); err != nil {
+				return err
+			}
+		}
+		say("%s%s: removed worktree %s", pfx, target, w.top)
+		if w.branch != "" && !o.keepBranch {
+			if p.merge != "" {
+				if !o.dryRun {
+					if _, err := git(w.repo, "branch", "-D", w.branch); err != nil {
+						return err
+					}
+				}
+				how := "merged"
+				if p.merge != "ancestor" {
+					how = "content already in"
+				}
+				say("%s%s: deleted branch %s (%s %s)", pfx, target, w.branch, how, p.target)
+			} else {
+				say("%s: kept branch %s (not merged into %s); `git -C %s branch -D %s` to drop it", target, w.branch, p.target, w.repo, w.branch)
+			}
+		}
+		if !contains(repos, w.repo) {
+			repos = append(repos, w.repo)
+		}
+	}
+	if len(repos) == 0 && rec != nil && rec.Repo != "" {
+		repos = append(repos, rec.Repo)
+	}
+	for _, repo := range repos {
+		if err := closeStrayPrimary(repo, o.dryRun); err != nil {
+			return err
+		}
+		if err := ffMain(repo, o.dryRun); err != nil {
+			return err
+		}
+	}
+	if o.dryRun {
+		return nil
+	}
+	if !isPath {
+		n := me
+		if n == "" && agent != nil {
+			n = agent.Name
+		}
+		if n == "" {
+			n = target
+		}
+		dropRecord(n)
+	} else if len(wts) > 0 {
+		return forgetWorktree(norm(wts[0].top))
+	}
+	return nil
+}
+
+func strayPrimaryVerdict(ws Workspace, all []Workspace, ps []Pane) string {
+	if ws.TabCount != 1 || ws.PaneCount != 1 {
+		return fmt.Sprintf("%d panes in %d tabs", ws.PaneCount, ws.TabCount)
+	}
+	if ws.Label != ws.Worktree.RepoName {
+		return fmt.Sprintf("labelled '%s', not the repo name herdr gives the one it spawns", ws.Label)
+	}
+	var pane *Pane
+	for i := range ps {
+		if ps[i].WorkspaceID == ws.WorkspaceID {
+			pane = &ps[i]
+			break
+		}
+	}
+	if pane == nil {
+		return "no pane found"
+	}
+	if cp := callerPane(); cp != "" && pane.PaneID == cp {
+		return "it is the pane you are running in"
+	}
+	if !paneIsBlankShell(*pane) {
+		return "its pane is not an idle shell prompt"
+	}
+	if sibs := groupOf(ws, all); len(sibs) > 0 {
+		return fmt.Sprintf("%d %s (%s); closing it would take them down", len(sibs), siblingsNote, labels(sibs))
+	}
+	return ""
+}
+
+const siblingsNote = "worktree workspace(s) of the repo still open"
+
+func closeStrayPrimary(repo string, dryRun bool) error {
+	pfx := ""
+	if dryRun {
+		pfx = "[dry-run] "
+	}
+	all, err := workspaces()
+	if err != nil {
+		return err
+	}
+	ps, err := panes()
+	if err != nil {
+		return err
+	}
+	key := repo + "/.git"
+	for _, ws := range all {
+		if !isPrimary(ws) || ws.Worktree.RepoKey != key {
+			continue
+		}
+		if why := strayPrimaryVerdict(ws, all, ps); why != "" {
+			say("left repo-root workspace %s (%s) open: %s", ws.WorkspaceID, ws.Label, why)
+			continue
+		}
+		if !dryRun {
+			if err := herdr(nil, "workspace", "close", ws.WorkspaceID); err != nil { // refuses if a sibling appeared meanwhile
+				return err
+			}
+		}
+		say("%sclosed blank repo-root workspace %s (%s)", pfx, ws.WorkspaceID, ws.Label)
+	}
+	return nil
+}
+
+// ffMain fast-forwards the main checkout when it is clean and on the default
+// branch.
+func ffMain(repo string, dryRun bool) error {
+	pfx := ""
+	if dryRun {
+		pfx = "[dry-run] "
+	}
+	if o, err := hasOrigin(repo); err != nil || !o {
+		return err
+	}
+	target, err := defaultBranch(repo)
+	if err != nil || !strings.HasPrefix(target, "origin/") {
+		return err
+	}
+	want := strings.TrimPrefix(target, "origin/")
+	cur, _, err := gitMaybe(repo, "symbolic-ref", "-q", "--short", "HEAD")
+	if err != nil {
+		return err
+	}
+	if cur != want {
+		on := cur
+		if on == "" {
+			on = "a detached HEAD"
+		}
+		say("main checkout %s not fast-forwarded: on %s, not %s", repo, on, want)
+		return nil
+	}
+	if d, err := dirty(repo, false); err != nil || d {
+		if d {
+			say("main checkout %s not fast-forwarded: uncommitted changes", repo)
+		}
+		return err
+	}
+	old, err := git(repo, "rev-parse", "HEAD")
+	if err != nil {
+		return err
+	}
+	nw, err := git(repo, "rev-parse", target)
+	if err != nil || old == nw {
+		return err
+	}
+	if _, ok, err := gitMaybe(repo, "merge-base", "--is-ancestor", "HEAD", target); err != nil || !ok {
+		if err == nil {
+			say("main checkout %s not fast-forwarded: %s has commits %s doesn't", repo, cur, target)
+		}
+		return err
+	}
+	if !dryRun {
+		if _, err := git(repo, "merge", "-q", "--ff-only", target); err != nil {
+			return err
+		}
+	}
+	say("%sfast-forwarded %s %s %s..%s", pfx, repo, cur, old[:7], nw[:7])
+	return nil
+}
+
+func cmdDone(argv []string) {
+	explicit, argv := popMachine(argv)
+	var o doneOpts
+	var targets []string
+	for _, a := range argv {
+		switch a {
+		case "--force":
+			o.force = true
+		case "--keep-worktree":
+			o.keepWorktree = true
+		case "--keep-branch":
+			o.keepBranch = true
+		case "--dry-run":
+			o.dryRun = true
+		default:
+			if strings.HasPrefix(a, "--") {
+				die("done: unknown option %s", a)
+			}
+			targets = append(targets, a)
+		}
+	}
+	if len(targets) == 0 {
+		die("done: which agent?")
+	}
+	rc := 0
+	for _, t := range targets {
+		err := pickMachine(t, explicit)
+		if err == nil && strings.Contains(t, "/") {
+			t, err = hostPath(t)
+		}
+		if err == nil {
+			err = doneOne(t, o)
+		}
+		var rf *Refused
+		switch {
+		case err == nil:
+		case errors.As(err, &rf):
+			warn("done %s: refused, nothing changed: %v", t, err)
+			rc = 1
+		default:
+			where := ""
+			if machine != "" {
+				where = " (on " + machine + ")"
+			}
+			warn("done %s%s: %v", t, where, err)
+			rc = 1
+		}
+	}
+	os.Exit(rc)
+}
+
+func cmdAdopt(argv []string) {
+	explicit, argv := popMachine(argv)
+	if len(argv) < 2 {
+		die("adopt: usage: adopt <name> <worktree-path>... [--machine LABEL]")
+	}
+	name, paths := argv[0], argv[1:]
+	if err := pickMachine(name, explicit); err != nil {
+		die("adopt: %v", herdrMsg(err))
+	}
+	rec := loadRecord(name)
+	if rec == nil {
+		ags, err := agents()
+		if err != nil {
+			die("%v", herdrMsg(err))
+		}
+		var a *Agent
+		for i := range ags {
+			if ags[i].Name == name {
+				a = &ags[i]
+			}
+		}
+		if a == nil {
+			die("adopt: no dispatch record and no live agent named %s", name)
+		}
+		p, err := paneGet(a.PaneID)
+		if err != nil {
+			die("%v", herdrMsg(err))
+		}
+		snd := a.Tokens["sound"]
+		if snd == "" {
+			snd = "on"
+		}
+		sock := socketPath()
+		rec = &Record{Name: name, Socket: &sock, Placement: "adopted", Kind: a.Kind, Started: nowISO(),
+			PaneID: p.PaneID, TerminalID: p.TerminalID, WorkspaceID: p.WorkspaceID, TabID: p.TabID, Sound: snd}
+		if machine != "" {
+			r, err := remote()
+			if err != nil {
+				die("%v", err)
+			}
+			rec.Socket, rec.Machine, rec.Host, rec.As = nil, machine, r.host, as
+		}
+	}
+	have := recWorktrees(rec)
+	for _, path := range paths {
+		w, err := linkedWorktree(path)
+		if err != nil {
+			die("adopt: %v", err)
+		}
+		dup := false
+		for _, h := range have {
+			if norm(h.Path) == norm(w.Path) {
+				dup = true
+			}
+		}
+		if dup {
+			say("%s: already has %s", name, w.Path)
+			continue
+		}
+		have = append(have, w)
+		b := w.Branch
+		if b == "" {
+			b = "detached"
+		}
+		say("%s: adopted %s [%s]", name, w.Path, b)
+	}
+	rec.Worktrees = have
+	if err := writeRecord(rec); err != nil {
+		die("could not write the dispatch record: %v", err)
+	}
+}
