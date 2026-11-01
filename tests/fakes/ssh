@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# A stand-in for ssh: runs the remote command on this machine, in a fake box.
+#
+# FAKE_SSH_HOSTS is a list of "<host>=<home>" words: the box's $HOME for each
+# host it knows. Any other host fails as ssh does, with exit 255. Every call
+# is logged to $FAKE_HERDR_DIR/ssh.log, one line per call.
+host=""
+while (($#)); do
+  case $1 in
+    -o) shift 2 ;;
+    -*) shift ;;
+    *) host=$1; shift; break ;;
+  esac
+done
+printf '%s\t%s\n' "$host" "$*" >>"$FAKE_HERDR_DIR/ssh.log"
+for pair in $FAKE_SSH_HOSTS; do
+  if [[ ${pair%%=*} == "$host" ]]; then
+    export HOME=${pair#*=}
+    cd "$HOME" || exit 255
+    exec bash -c "$*"
+  fi
+done
+echo "ssh: Could not resolve hostname $host: Name or service not known" >&2
+exit 255

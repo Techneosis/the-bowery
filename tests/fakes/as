@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# A stand-in identity command, in the shape bowery's identity_command expects:
+#   as <who> [argv...]   run argv (default: a shell) as <who>
+#   as --list            who has an identity here
+# An identity is $HOME/identities/<who>.env; using one exports BOWERY_AS.
+if [[ $1 == --list ]]; then
+  for f in "$HOME"/identities/*.env; do [[ -e $f ]] && basename "$f" .env; done
+  exit 0
+fi
+who=$1; shift
+f=$HOME/identities/$who.env
+[[ -r $f ]] || { echo "as: no identity '$who' here" >&2; exit 1; }
+set -a; . "$f"; set +a
+export BOWERY_AS=$who
+printf '%s\t%s\n' "$who" "$*" >>"$HOME/as.log"
+(($#)) || set -- bash
+exec "$@"

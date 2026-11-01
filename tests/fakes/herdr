@@ -1,0 +1,440 @@
+#!/usr/bin/env python3
+"""A stand-in for the herdr CLI: the subset bowery uses, against a JSON file.
+
+Each server is one state file in $FAKE_HERDR_DIR: local.json, and
+machine-<label>.json for `herdr --machine <label>` (saved machines are listed
+in machines.json). Replies have the real CLI's shapes (captured from herdr
+0.9.5): {"id", "result"} on stdout, {"error": {"code", "message"}} and exit 1
+on failure.
+
+What it models, because bowery's behaviour depends on it:
+- a fresh pane refuses `agent start` with agent_pane_busy until its shell is
+  "ready" (FAKE_PANE_WARMUP starts, default 1);
+- claude's folder-trust dialog, the first time an agent starts in a folder
+  (FAKE_TRUST_DIALOG=0 turns it off): agent_not_ready, the dialog on screen,
+  and Down Enter answers it (a bare Enter quits the agent);
+- `pane close` on the last pane of a worktree group's primary closes the whole
+  group, and `workspace close` refuses such a primary;
+- `pane run`: `sleep ...` occupies the pane's foreground (process-info shows
+  it), `exec <cmd> <who>` turns the pane's shell into whatever environment
+  `<cmd> <who> env` prints, anything else runs under bash with the pane's
+  environment and its output lands in the pane for wait-output.
+
+Tests read and change the same file to set an agent's status, start a busy
+process, and so on (tests/_fake.py).
+"""
+import fcntl
+import json
+import os
+import shlex
+import subprocess
+import sys
+
+DIR = os.environ["FAKE_HERDR_DIR"]
+TRUST = "Do you trust the files in this folder?\n> No, exit\n  Yes, I trust this folder"
+
+
+def out(cid, result):
+    print(json.dumps({"id": cid, "result": result}))
+    sys.exit(0)
+
+
+def err(cid, code, message):
+    print(json.dumps({"error": {"code": code, "message": message}, "id": cid}))
+    sys.exit(1)
+
+
+def opt(args, name, default=None):
+    if name in args:
+        i = args.index(name)
+        return args[i + 1] if i + 1 < len(args) else default
+    return default
+
+
+def opts(args, name):
+    return [args[i + 1] for i, a in enumerate(args) if a == name and i + 1 < len(args)]
+
+
+def positional(args, valued=()):
+    pos, i = [], 0
+    while i < len(args):
+        a = args[i]
+        if a == "--":
+            break
+        if a.startswith("--"):
+            i += 2 if a in valued else 1
+            continue
+        pos.append(a)
+        i += 1
+    return pos
+
+
+def empty():
+    return {"next_ws": 1, "next_term": 1, "workspaces": [], "tabs": {}, "panes": [], "agents": {},
+            "trusted": [], "log": []}
+
+
+# ------------------------------------------------------------------ views
+
+def ws_view(s, w):
+    v = {"workspace_id": w["workspace_id"], "label": w["label"], "number": s["workspaces"].index(w) + 1,
+         "tab_count": len(w["tabs"]), "pane_count": sum(1 for p in s["panes"] if p["workspace_id"] == w["workspace_id"]),
+         "agent_status": "unknown", "focused": False, "active_tab_id": w["tabs"][0] if w["tabs"] else None}
+    if w.get("worktree"):
+        v["worktree"] = w["worktree"]
+    return v
+
+
+def tab_view(s, t):
+    return {"tab_id": t["tab_id"], "label": t["label"], "workspace_id": t["workspace_id"],
+            "pane_count": sum(1 for p in s["panes"] if p["tab_id"] == t["tab_id"]), "agent_status": "unknown",
+            "focused": False}
+
+
+def agent_in(s, pane_id):
+    return next((a for a in s["agents"].values() if a["pane_id"] == pane_id), None)
+
+
+def pane_view(s, p):
+    v = {k: p[k] for k in ("pane_id", "workspace_id", "tab_id", "terminal_id", "cwd")}
+    v["foreground_cwd"] = p["cwd"]
+    v["terminal_title_stripped"] = p.get("title") or ("sleep" if p.get("busy") else "shell")
+    a = agent_in(s, p["pane_id"])
+    v["agent_status"] = a["agent_status"] if a else "unknown"
+    if a:
+        v["agent"] = a["agent"]
+    return v
+
+
+def agent_view(s, a):
+    p = pane(s, a["pane_id"])
+    return {"name": a["name"], "pane_id": a["pane_id"], "agent": a["agent"], "agent_status": a["agent_status"],
+            "tokens": dict(p.get("tokens", {})) if p else {}, "cwd": p["cwd"] if p else "",
+            "terminal_title_stripped": a["agent"]}
+
+
+# ------------------------------------------------------------------ model
+
+def ws(s, wid):
+    return next((w for w in s["workspaces"] if w["workspace_id"] == wid), None)
+
+
+def pane(s, pid):
+    return next((p for p in s["panes"] if p["pane_id"] == pid), None)
+
+
+def new_pane(s, w, tab_id, cwd):
+    w["next_pane"] += 1
+    p = {"pane_id": f"{w['workspace_id']}:p{w['next_pane']}", "workspace_id": w["workspace_id"], "tab_id": tab_id,
+         "terminal_id": f"term_{s['next_term']:06x}", "cwd": cwd, "env": {}, "output": [], "tokens": {},
+         "warmup": int(os.environ.get("FAKE_PANE_WARMUP", "1")), "busy": None}
+    s["next_term"] += 1
+    s["panes"].append(p)
+    return p
+
+
+def new_tab(s, w, label, cwd):
+    w["next_tab"] += 1
+    tid = f"{w['workspace_id']}:t{w['next_tab']}"
+    s["tabs"][tid] = {"tab_id": tid, "label": label or str(w["next_tab"]), "workspace_id": w["workspace_id"]}
+    w["tabs"].append(tid)
+    return s["tabs"][tid], new_pane(s, w, tid, cwd)
+
+
+def new_ws(s, label, cwd, worktree=None):
+    wid = f"w{s['next_ws']}"
+    s["next_ws"] += 1
+    w = {"workspace_id": wid, "label": label, "cwd": cwd, "tabs": [], "next_tab": 0, "next_pane": 0}
+    if worktree:
+        w["worktree"] = worktree
+    s["workspaces"].append(w)
+    t, p = new_tab(s, w, None, cwd)
+    return w, t, p
+
+
+def drop_pane(s, p):
+    s["panes"].remove(p)
+    for n, a in list(s["agents"].items()):
+        if a["pane_id"] == p["pane_id"]:
+            del s["agents"][n]
+
+
+def drop_ws(s, w):
+    for p in [p for p in s["panes"] if p["workspace_id"] == w["workspace_id"]]:
+        drop_pane(s, p)
+    for t in w["tabs"]:
+        s["tabs"].pop(t, None)
+    s["workspaces"].remove(w)
+
+
+def drop_tab(s, tid):
+    t = s["tabs"][tid]
+    w = ws(s, t["workspace_id"])
+    if len(w["tabs"]) == 1:
+        return drop_ws(s, w)
+    for p in [p for p in s["panes"] if p["tab_id"] == tid]:
+        drop_pane(s, p)
+    w["tabs"].remove(tid)
+    del s["tabs"][tid]
+
+
+def group(s, w):
+    key = (w.get("worktree") or {}).get("repo_key")
+    return [x for x in s["workspaces"] if key and (x.get("worktree") or {}).get("repo_key") == key and x is not w]
+
+
+def is_primary(w):
+    return bool(w.get("worktree")) and not w["worktree"]["is_linked_worktree"]
+
+
+def under(path, root):
+    path, root = os.path.normpath(path), os.path.normpath(root)
+    return path == root or path.startswith(root + "/")
+
+
+# ------------------------------------------------------------------ commands
+
+def run(s, argv):
+    if not argv:
+        err("cli", "usage", "no command")
+    noun, verb, args = argv[0], (argv[1] if len(argv) > 1 else ""), argv[2:]
+    cid = f"cli:{noun}:{verb}"
+    s["log"].append(argv)
+
+    if noun == "workspace":
+        if verb == "list":
+            out(cid, {"type": "workspace_list", "workspaces": [ws_view(s, w) for w in s["workspaces"]]})
+        if verb == "create":
+            w, t, p = new_ws(s, opt(args, "--label", "workspace"), opt(args, "--cwd", os.environ.get("HOME")))
+            save(s)
+            out(cid, {"type": "workspace_created", "workspace": ws_view(s, w), "tab": tab_view(s, t), "root_pane": pane_view(s, p)})
+        if verb == "close":
+            w = ws(s, args[0])
+            if not w:
+                err(cid, "workspace_not_found", f"workspace {args[0]} not found")
+            if is_primary(w) and any(x["worktree"]["is_linked_worktree"] for x in group(s, w)):
+                err(cid, "workspace_group_close_required", f"workspace {args[0]} is a group primary with linked workspaces")
+            drop_ws(s, w)
+            save(s)
+            out(cid, {"type": "ok"})
+    if noun == "tab":
+        if verb == "create":
+            w = ws(s, opt(args, "--workspace"))
+            if not w:
+                err(cid, "workspace_not_found", "workspace not found")
+            t, p = new_tab(s, w, opt(args, "--label"), opt(args, "--cwd", w["cwd"]))
+            save(s)
+            out(cid, {"type": "tab_created", "tab": tab_view(s, t), "root_pane": pane_view(s, p)})
+        if verb in ("get", "close"):
+            t = s["tabs"].get(args[0])
+            if not t:
+                err(cid, "tab_not_found", f"tab {args[0]} not found")
+            if verb == "get":
+                out(cid, {"type": "tab_info", "tab": tab_view(s, t)})
+            drop_tab(s, args[0])
+            save(s)
+            out(cid, {"type": "ok"})
+        if verb == "list":
+            w = ws(s, opt(args, "--workspace"))
+            out(cid, {"type": "tab_list", "tabs": [tab_view(s, s["tabs"][t]) for t in w["tabs"]]})
+    if noun == "pane":
+        if verb == "list":
+            out(cid, {"type": "pane_list", "panes": [pane_view(s, p) for p in s["panes"]]})
+        if verb in ("get", "current"):
+            pid = args[0] if verb == "get" else os.environ.get("HERDR_PANE_ID") or (s["panes"][0]["pane_id"] if s["panes"] else "")
+            p = pane(s, pid)
+            if not p:
+                err(cid, "pane_not_found", f"pane {pid} not found")
+            out(cid, {"type": "pane_info", "pane": pane_view(s, p)})
+        pid = opt(args, "--pane") if verb in ("split", "process-info") else (args[0] if args else "")
+        p = pane(s, pid)
+        if not p:
+            err(cid, "pane_not_found", f"pane {pid} not found")
+        if verb == "split":
+            n = new_pane(s, ws(s, p["workspace_id"]), p["tab_id"], opt(args, "--cwd", p["cwd"]))
+            save(s)
+            out(cid, {"type": "pane_info", "pane": pane_view(s, n)})
+        if verb == "close":
+            w = ws(s, p["workspace_id"])
+            mine = [x for x in s["panes"] if x["workspace_id"] == w["workspace_id"]]
+            if len(mine) > 1:
+                if len([x for x in mine if x["tab_id"] == p["tab_id"]]) == 1:
+                    drop_tab(s, p["tab_id"])
+                else:
+                    drop_pane(s, p)
+            elif is_primary(w):  # the hazard: the whole group goes
+                for x in [w, *group(s, w)]:
+                    drop_ws(s, x)
+            else:
+                drop_ws(s, w)
+            save(s)
+            out(cid, {"type": "ok"})
+        if verb == "run":
+            pane_run(s, p, args[1])
+            save(s)
+            out(cid, {"type": "ok"})
+        if verb == "wait-output":
+            want = opt(args, "--match")
+            for line in p["output"]:
+                if want in line:
+                    out(cid, {"type": "output_matched", "matched_line": line, "pane_id": pid})
+            err(cid, "timeout", "timed out waiting for output match")
+        if verb == "report-metadata":
+            for tok in opts(args, "--token"):
+                k, _, v = tok.partition("=")
+                p["tokens"][k] = v
+            for k in opts(args, "--clear-token"):
+                p["tokens"].pop(k, None)
+            p["token_source"] = opt(args, "--source")
+            save(s)
+            out(cid, {"type": "ok"})
+        if verb == "process-info":
+            shell = 1000 + s["panes"].index(p)
+            fg = [{"pid": shell, "name": "bash"}] if not p.get("busy") else [{"pid": 50000 + shell, "name": p["busy"]}]
+            out(cid, {"type": "pane_process_info", "process_info": {
+                "pane_id": pid, "shell_pid": shell, "foreground_process_group_id": fg[0]["pid"], "foreground_processes": fg}})
+    if noun == "agent":
+        if verb == "list":
+            out(cid, {"type": "agent_list", "agents": [agent_view(s, a) for a in s["agents"].values()]})
+        name = args[0] if args else ""
+        if verb == "start":
+            pid = opt(args, "--pane")
+            p = pane(s, pid)
+            if not p:
+                err(cid, "agent_pane_not_found", f"agent target pane {pid} not found")
+            if p["warmup"] > 0 or p.get("busy"):
+                p["warmup"] = max(0, p["warmup"] - 1)
+                save(s)
+                err(cid, "agent_pane_busy", f"pane {pid} is busy")
+            if name in s["agents"]:
+                err(cid, "agent_name_taken", f"agent {name} already exists")
+            extra = args[args.index("--") + 1:] if "--" in args else []
+            a = {"name": name, "pane_id": pid, "agent": opt(args, "--kind", "claude"), "agent_status": "idle",
+                 "args": extra, "prompts": [], "env": dict(p["env"]), "screen": "> "}
+            s["agents"][name] = a
+            if os.environ.get("FAKE_TRUST_DIALOG", "1") != "0" and not any(under(p["cwd"], t) for t in s["trusted"]):
+                a["agent_status"], a["screen"] = "blocked", TRUST
+                save(s)
+                err(cid, "agent_not_ready", f"agent {name} did not become ready")
+            save(s)
+            out(cid, {"type": "agent_started", "agent": agent_view(s, a)})
+        a = s["agents"].get(name)
+        if not a:
+            err(cid, "agent_not_found", f"agent {name} not found")
+        if verb == "read":
+            out(cid, {"type": "agent_read", "read": {"text": a["screen"]}})
+        if verb == "send-keys":
+            keys = args[1:]
+            if a["screen"] == TRUST:
+                if keys == ["Down", "Enter"] and os.environ.get("FAKE_TRUST_STUCK") != "1":
+                    s["trusted"].append(pane(s, a["pane_id"])["cwd"])
+                    a["agent_status"], a["screen"] = "idle", "> "
+                elif keys == ["Enter"]:
+                    del s["agents"][name]
+            save(s)
+            out(cid, {"type": "ok"})
+        if verb == "wait":
+            out(cid, {"type": "agent_status", "agent": agent_view(s, a)})
+        if verb == "prompt":
+            if a["agent_status"] == "blocked":
+                err(cid, "agent_blocked", f"agent {name} is blocked")
+            a["prompts"].append({"text": args[1], "wait": "--wait" in args})
+            save(s)
+            out(cid, {"type": "ok"})
+    if noun == "worktree" and verb == "create":
+        repo, branch, path = opt(args, "--cwd"), opt(args, "--branch"), opt(args, "--path")
+        subprocess.run(["git", "-C", repo, "worktree", "add", "-q", "-b", branch, path, opt(args, "--base", "HEAD")],
+                       check=True, capture_output=True)
+        key = os.path.join(repo, ".git")
+        if not any((w.get("worktree") or {}).get("repo_key") == key and is_primary(w) for w in s["workspaces"]):
+            new_ws(s, os.path.basename(repo), repo, {"repo_key": key, "repo_name": os.path.basename(repo),
+                                                     "is_linked_worktree": False, "checkout_path": repo})
+        w, t, p = new_ws(s, opt(args, "--label", branch), path, {"repo_key": key, "repo_name": os.path.basename(repo),
+                                                                "is_linked_worktree": True, "checkout_path": path})
+        save(s)
+        out(cid, {"type": "worktree_created", "workspace": ws_view(s, w), "root_pane": pane_view(s, p)})
+    err(cid, "unknown_command", f"fake herdr does not do: {' '.join(argv)}")
+
+
+def server_env():
+    """The environment a pane's shell has: on a machine, the box's HOME."""
+    env = dict(os.environ)
+    if SERVER.startswith("machine-"):
+        label = SERVER[len("machine-"):]
+        target = next((m.get("target") or label for m in json.load(open(os.path.join(DIR, "machines.json")))
+                       if m["label"] == label), label)
+        homes = dict(w.split("=", 1) for w in os.environ.get("FAKE_SSH_HOSTS", "").split() if "=" in w)
+        env["HOME"] = homes.get(target, homes.get(label, env["HOME"]))
+    return env
+
+
+def pane_run(s, p, cmd):
+    words = shlex.split(cmd)
+    if words and words[0] == "sleep":
+        p["busy"] = "sleep"
+        return
+    if words and words[0] == "clear":
+        p["output"] = []
+        return
+    if words and words[0] == "exec":
+        r = subprocess.run(["bash", "-c", cmd.split(None, 1)[1] + " env -0"],
+                           capture_output=True, text=True, env={**server_env(), **p["env"]}, cwd=p["cwd"])
+        if r.returncode != 0:
+            p["output"].append(r.stderr.strip())
+            return
+        p["env"] = dict(kv.split("=", 1) for kv in r.stdout.split("\0") if "=" in kv)
+        return
+    r = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True, env={**server_env(), **p["env"]}, cwd=p["cwd"])
+    p["output"].extend((r.stdout + r.stderr).splitlines())
+
+
+# ------------------------------------------------------------------ main
+
+def state_file(server):
+    return os.path.join(DIR, f"{server}.json")
+
+
+SERVER = "local"
+
+
+def save(s):
+    with open(state_file(SERVER) + ".tmp", "w") as f:
+        json.dump(s, f, indent=1)
+    os.replace(state_file(SERVER) + ".tmp", state_file(SERVER))
+
+
+def main(argv):
+    global SERVER
+    if argv[:2] == ["machine", "list"]:
+        try:
+            print(open(os.path.join(DIR, "machines.json")).read())
+        except FileNotFoundError:
+            print("[]")
+        return
+    if argv and argv[0] == "--machine":
+        label = argv[1]
+        try:
+            known = [m["label"] for m in json.load(open(os.path.join(DIR, "machines.json")))]
+        except FileNotFoundError:
+            known = []
+        if label not in known:
+            print(f"error: unknown machine '{label}'; use `herdr machine list`", file=sys.stderr)
+            sys.exit(2)
+        if os.path.exists(os.path.join(DIR, f"down-{label}")):
+            print(f"error: machine '{label}' is unreachable", file=sys.stderr)
+            sys.exit(1)
+        SERVER, argv = f"machine-{label}", argv[2:]
+    with open(os.path.join(DIR, ".lock"), "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            s = json.load(open(state_file(SERVER)))
+        except FileNotFoundError:
+            s = empty()
+        try:
+            run(s, argv)
+        finally:
+            save(s)
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])
