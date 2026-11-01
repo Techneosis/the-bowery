@@ -5,6 +5,7 @@ a checkout install into a throwaway HOME, so nothing touches the real ~/.local.
 """
 
 import os
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -73,6 +74,8 @@ class ClaudeSetup(unittest.TestCase):
 class CheckoutInstall(unittest.TestCase):
     """./install.sh from this checkout, into a throwaway HOME."""
 
+    @unittest.skipUnless(shutil.which("go") or (ROOT / "build" / "bowery").exists(),
+                         "a checkout install builds with Go, and this runner has none")
     def test_links_the_binary_and_completion_and_uninstalls(self):
         with tempfile.TemporaryDirectory() as h:
             env = {**os.environ, "HOME": h, "CLAUDE_CONFIG_DIR": str(Path(h) / "no-claude")}

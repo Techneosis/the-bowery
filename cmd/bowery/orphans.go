@@ -16,14 +16,15 @@ type orphan struct{ kind, line, target string }
 // walking into them.
 func checkoutsUnder(root string) ([]string, error) {
 	if machine != "" { // <root>/<repo>/<branch>/.git, as dispatch makes them
-		rc, out, err := sshSh("find " + shq(root) + " -mindepth 2 -maxdepth 3 -name .git -printf '%h\\n'")
+		// Plain -print: -printf is GNU-only, and the box may be a Mac.
+		rc, out, err := sshSh("find " + shq(root) + " -mindepth 2 -maxdepth 3 -name .git -print")
 		if err != nil || rc != 0 {
 			return nil, err
 		}
 		var found []string
 		for _, l := range strings.Split(out, "\n") {
 			if strings.TrimSpace(l) != "" {
-				found = append(found, l)
+				found = append(found, strings.TrimSuffix(l, "/.git"))
 			}
 		}
 		sort.Strings(found)
