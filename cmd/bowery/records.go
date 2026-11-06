@@ -292,7 +292,8 @@ func pickMachine(target, explicit string) error {
 	if !nameRE.MatchString(target) {
 		return nil
 	}
-	if loadRecord(target) != nil {
+	if r := loadRecord(target); r != nil {
+		useMachine("", r.As) // a local agent with an identity: its git runs as them
 		return nil
 	}
 	ags, err := agents()

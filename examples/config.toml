@@ -16,6 +16,12 @@ trust_roots = ["~/dev"]
 [models]
 # fast = "claude-haiku-4-5"
 
+# Identities for agents on this machine's own server, the same contract as a
+# machine's identity_command below. With it, a local dispatch may take --as;
+# without it, --as needs --machine.
+# identity_command = "~/bin/as"
+# identity_env = "BOWERY_AS"
+
 # A saved herdr machine (`herdr machine list`), by its label.
 [machines.swarm-box]
 # Runs things as a person on the box: `<cmd> <who>` is their shell,

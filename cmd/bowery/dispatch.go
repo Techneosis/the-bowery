@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os/exec"
 	"errors"
 	"fmt"
 	"os"
@@ -82,7 +83,12 @@ func parseStart(argv []string) startOpts {
 		die("--worktree makes a new checkout, so it needs a new pane: drop --pane")
 	}
 	if o.as != "" && o.machine == "" {
-		die("--as picks an identity on a --machine; a local agent runs as you")
+		if !nameRE.MatchString(o.as) {
+			die("--as must be lowercase/digits/-/_ (got '%s')", o.as)
+		}
+		if cfg.IdentityCommand == "" {
+			die("--as picks an identity, and this machine has no identity_command in %s; a local agent runs as you", cfg.path)
+		}
 	}
 	if o.machine != "" {
 		if o.as != "" && !nameRE.MatchString(o.as) {
@@ -148,6 +154,16 @@ func cmdDispatch(argv []string) {
 			}
 		}
 		_ = r
+	} else if o.as != "" {
+		// An identity on this machine's own server (a box dispatching to itself).
+		useMachine("", o.as)
+		if out, err := exec.Command(expandUser(cfg.IdentityCommand), o.as, "true").CombinedOutput(); err != nil {
+			have := "none"
+			if l, err := exec.Command(expandUser(cfg.IdentityCommand), "--list").Output(); err == nil && strings.TrimSpace(string(l)) != "" {
+				have = strings.Join(strings.Fields(string(l)), ", ")
+			}
+			die("--as %s: no usable identity here (%s); identities: %s", o.as, strings.TrimSpace(string(out)), have)
+		}
 	}
 
 	// Args handed through to the agent executable (after --). Bypassing
@@ -197,6 +213,8 @@ func cmdDispatch(argv []string) {
 		r, _ := remote()
 		rec.Socket, rec.Machine, rec.Host, rec.As = nil, machine, r.host, as
 		here = r.home
+	} else {
+		rec.As = as
 	}
 	m := &made{}
 	pane, err := startAgent(name, o, from, here, agentArgs, rec, &also, m)
@@ -242,9 +260,9 @@ func cmdDispatch(argv []string) {
 	}
 	if machine != "" {
 		out = append(out, kv{"machine", machine})
-		if as != "" {
-			out = append(out, kv{"as", as})
-		}
+	}
+	if as != "" {
+		out = append(out, kv{"as", as})
 	}
 	fmt.Println(jsonLine(out))
 }
@@ -384,7 +402,7 @@ func startAgent(name string, o startOpts, from, here string, agentArgs []string,
 	if pane == "" {
 		return "", fail("could not obtain a pane")
 	}
-	if machine != "" && as != "" {
+	if as != "" && machineConfig(machine).IdentityCommand != "" {
 		if err := become(pane, as); err != nil {
 			return "", err
 		}

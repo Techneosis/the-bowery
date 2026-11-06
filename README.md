@@ -130,6 +130,11 @@ agent's shell becomes that person's before the agent starts, and the
 credentials never leave the box. A machine with no `identity_command` refuses
 `--as`, and its agents run as the ssh user.
 
+The box itself can dispatch under a name too (a job there handing work to an
+agent, say): a top-level `identity_command` in the box's own config allows
+`--as` without `--machine`, with the same contract. Local git for that agent,
+including `done`'s checks, runs through it.
+
 ```
 bowery dispatch fixer --machine swarm-box --as alice --worktree fix-auth --cwd ~/src/app -- "..."
 bowery done fixer                  # found by its record; no flag needed

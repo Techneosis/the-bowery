@@ -50,7 +50,9 @@ remote (a saved herdr machine: herdr machine list)
                            own $HOME/... map to the box's home.
   --as <WHO>               who the agent runs as there, through the machine's
                            identity_command (config). Required when the
-                           machine has one, refused when it doesn't.
+                           machine has one, refused when it doesn't. Without
+                           --machine: through the top-level identity_command,
+                           for a box dispatching to its own server.
 
 options
   --quiet                  tag sound=off (the default: dispatched agents are quiet)

@@ -27,6 +27,11 @@ type Config struct {
 	// Short names for --model, expanded before they reach the agent. Anything
 	// not listed is passed through as written (claude resolves its own aliases).
 	Models map[string]string `toml:"models"`
+	// Identities for agents on this machine's own server (a shared box
+	// dispatching to itself): the same contract as a machine's
+	// identity_command. Unset: --as is refused for a local dispatch.
+	IdentityCommand string `toml:"identity_command"`
+	IdentityEnv     string `toml:"identity_env"`
 	// Per saved herdr machine (`herdr machine list`), by label.
 	Machines map[string]MachineConfig `toml:"machines"`
 
@@ -91,6 +96,9 @@ func loadConfig() *Config {
 	if c.TrustRoots == nil {
 		c.TrustRoots = []string{"~/dev"}
 	}
+	if c.IdentityEnv == "" {
+		c.IdentityEnv = "BOWERY_AS"
+	}
 	for label, m := range c.Machines {
 		if m.IdentityEnv == "" {
 			m.IdentityEnv = "BOWERY_AS"
@@ -104,6 +112,9 @@ func loadConfig() *Config {
 }
 
 func machineConfig(label string) MachineConfig {
+	if label == "" {
+		return MachineConfig{IdentityCommand: cfg.IdentityCommand, IdentityEnv: cfg.IdentityEnv, TrustRoots: cfg.TrustRoots}
+	}
 	if m, ok := cfg.Machines[label]; ok {
 		return m
 	}
@@ -125,6 +136,10 @@ func cmdConfig(args []string) {
 	fmt.Printf("trust_roots = %s\n", tomlList(cfg.TrustRoots))
 	fmt.Printf("# plus the herdr worktrees dir: %s\n", localWorktreeRoot())
 	fmt.Printf("# records: %s\n", stateDir())
+	if cfg.IdentityCommand != "" {
+		fmt.Printf("identity_command = %q\n", cfg.IdentityCommand)
+		fmt.Printf("identity_env = %q\n", cfg.IdentityEnv)
+	}
 	if len(cfg.Models) > 0 {
 		fmt.Println("\n[models]")
 		for _, k := range sortedKeys(cfg.Models) {

@@ -30,10 +30,7 @@ var nameRE = regexp.MustCompile(`^[a-z0-9_-]+$`)
 
 func useMachine(label, who string) {
 	machine = label
-	as = ""
-	if label != "" {
-		as = who
-	}
+	as = who
 }
 
 type machineProfile struct {
@@ -265,7 +262,7 @@ func under(path, root string) bool {
 
 // identityPrefix is what runs a remote command as `as`, or "" with no one.
 func identityPrefix() string {
-	if machine == "" || as == "" {
+	if machine == "" || as == "" || machineConfig(machine).IdentityCommand == "" {
 		return ""
 	}
 	return machineConfig(machine).IdentityCommand + " " + shq(as) + " "

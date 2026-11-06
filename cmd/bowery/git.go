@@ -20,6 +20,10 @@ func gitOut(repo string, args ...string) (out string, ok bool, err error) {
 		return strings.TrimSpace(o), rc == 0, nil
 	}
 	cmd := exec.Command("git", append([]string{"-C", repo}, args...)...)
+	if ic := cfg.IdentityCommand; as != "" && ic != "" {
+		// `<identity_command> <who> <argv...>` runs argv as them.
+		cmd = exec.Command(expandUser(ic), append([]string{as, "git", "-C", repo}, args...)...)
+	}
 	var stdout, stderr strings.Builder
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	e := cmd.Run()

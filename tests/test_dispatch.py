@@ -11,7 +11,7 @@ import json
 import unittest
 from pathlib import Path
 
-from _fake import Bed, sh
+from _fake import FAKES, Bed, sh
 
 
 class Start(Bed):
@@ -557,6 +557,39 @@ class Hazard(Bed):
         self.assertIn("closed blank repo-root workspace", out)
         self.assertNotIn("repo", self.ws_labels())
         self.assertEqual(self.ws_labels(), [])
+
+
+class LocalIdentity(Bed):
+    """A shared box dispatching to its own server, as a person there."""
+
+    def setUp(self):
+        super().setUp()
+        (self.home / "identities").mkdir()
+        (self.home / "identities" / "alice.env").write_text("GIT_AUTHOR_NAME=alice\nGIT_COMMITTER_NAME=alice\n")
+        self.config.write_text(f'identity_command = "{FAKES}/as"\n')
+
+    def test_dispatch_as_a_local_identity(self):
+        out = self.dispatch("mine", "--as", "alice", "--worktree", "mine", "--cwd", self.repo, "--", "go")
+        self.assertEqual(out["as"], "alice")
+        self.assertNotIn("machine", out)
+        a = self.agent("mine")
+        self.assertEqual(a["env"].get("BOWERY_AS"), "alice", "the pane's shell became alice before the agent started")
+        self.assertEqual(self.record("mine")["as"], "alice")
+        self.assertIn("alice\tgit -C", (self.home / "as.log").read_text(), "git ran as alice")
+
+    def test_done_runs_git_as_the_identity(self):
+        self.dispatch("mine", "--as", "alice", "--worktree", "mine", "--cwd", self.repo)
+        (self.home / "as.log").write_text("")
+        self.ok("done", "mine", "--force")
+        self.assertIn("alice\tgit -C", (self.home / "as.log").read_text())
+
+    def test_an_unknown_local_identity_is_refused(self):
+        r = self.refused("no usable identity", "dispatch", "x", "--as", "bob", "--cwd", self.repo)
+        self.assertIn("alice", r)
+
+    def test_as_needs_a_local_identity_command(self):
+        self.config.write_text("")
+        self.refused("no identity_command", "dispatch", "x", "--as", "alice", "--cwd", self.repo)
 
 
 if __name__ == "__main__":

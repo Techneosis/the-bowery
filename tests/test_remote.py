@@ -25,7 +25,7 @@ class ArgumentChecks(Bed):
     def test_refusals(self):
         self.add_box()
         cases = [
-            ("--as picks an identity on a --machine", ["--as", "alice"]),
+            ("--as picks an identity, and this machine has no identity_command", ["--as", "alice"]),
             (f"--machine {BOX} needs --as", ["--machine", BOX]),
             ("--as must be lowercase", ["--machine", BOX, "--as", "Bad Name"]),
             ("--split, --tab and --from", ["--machine", BOX, "--as", "t", "--split"]),
