@@ -253,3 +253,26 @@ sits between marker comments, so a later install updates it in place and
 How it works, plainly, and why: [docs/design.md](docs/design.md).
 
 MIT licensed.
+
+## Watching what's in flight
+
+An orchestrator that has agents, PRs and CI runs in flight shouldn't poll
+them in a loop. `bowery watch <config>` does it in the background and exits
+as soon as something worth acting on changes, so the exit is the wake-up:
+
+```
+repo acme/web
+machine swarm-box                  # agent lines below are on that machine
+agent fixer                        # idle | done | blocked | gone (working is quiet)
+pr 412                             # OPEN | MERGED | CLOSED, /CONFLICTING
+run ci.yml feature-x               # latest run on a branch or commit (in progress is quiet)
+ticket T-12                        # anything else: ~/.config/bowery/watch.d/ticket T-12
+```
+
+It prints `CHANGED:` with the lines that changed and `ALL:` with everything,
+`STILL BLOCKED:` when an agent is at a dialog, or `HEARTBEAT` after `--max`
+(45m) with nothing worth waking for. Every kind reports a coarse state, never
+progress text, so it wakes on transitions rather than narration. A kind of
+your own is a script in `watch.d`: its last line of output is the value, and a
+leading `~` marks it quiet. `bowery watch --help` has the details.
+

@@ -1,10 +1,10 @@
 package main
 
 import (
-	"os/exec"
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"

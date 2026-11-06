@@ -12,6 +12,7 @@ const usage = `bowery: send agents out into herdr, and bring them home with done
 
   bowery dispatch <name> [placement] [options] [-- <prompt>]
   bowery done <name|pane|worktree-path>... [--force] [--keep-worktree] [--keep-branch] [--dry-run]
+  bowery watch <config> [--poll 30s] [--max 45m]   (bowery watch --help)
 
 dispatch: make (or take) a pane, start the agent, tag it quiet, optionally
 hand it a prompt, and record what was made for it. Prints JSON:
@@ -141,6 +142,8 @@ func main() {
 		cmdConfig(rest)
 	case "names":
 		cmdNames()
+	case "watch":
+		cmdWatch(rest)
 	default:
 		hint := ""
 		if nameRE.MatchString(cmd) {
