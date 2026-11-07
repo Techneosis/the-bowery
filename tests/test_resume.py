@@ -216,10 +216,11 @@ class Resume(Bed):
         a = self.dispatch("old", "--cwd", self.repo)
         f = self.records("old")[0]
         rec = json.loads(f.read_text())
-        for k in ("session", "cwd", "gated", "model"):
+        for k in ("session", "cwd", "gated", "model", "terminal_id", "owns"):
             rec.pop(k, None)
+        rec["branch"] = None  # as records from before owns and branches were written
         f.write_text(json.dumps(rec))
-        self.kill("old")
+        self.herdr("tab", "close", self.agent("old")["tab_id"] if "tab_id" in self.agent("old") else a["tab_id"])
         self.refused("has no session id", "resume", "old")
         self.ok("list")
         self.ok("orphans")
@@ -558,19 +559,69 @@ class Resume(Bed):
         self.resume("loop", "--not-within", "1ms")
         self.assertEqual(self.record("loop")["resumes"], 2)
 
-    def test_one_resume_of_a_name_at_a_time(self):
+    def lock(self, name):
         import fcntl
+        tag = self.records(name)[0].name.split(".")[1]
+        (self.state / "locks").mkdir(exist_ok=True)
+        f = open(self.state / "locks" / f"{name}.{tag}.lock", "w")
+        fcntl.flock(f, fcntl.LOCK_EX)  # another resume, dispatch or done, mid-way
+        return f
+
+    def state_files(self):
+        return sorted(str(p.relative_to(self.state)) for p in self.state.rglob("*") if "locks" not in p.parts)
+
+    def test_one_resume_dispatch_or_done_of_a_name_at_a_time(self):
         self.dispatch("racy", "--cwd", self.repo)
+        self.dispatch("other", "--cwd", self.repo)
         self.kill("racy")
-        tag = self.records("racy")[0].name.split(".")[1]
-        with open(self.state / f".racy.{tag}.resume.lock", "w") as f:
-            fcntl.flock(f, fcntl.LOCK_EX)  # another resume, mid-way
+        with self.lock("racy"):
             snap = self.unchanged("racy")
-            self.refused("another resume of racy is running", "resume", "racy")
+            self.refused("another resume, dispatch or done of racy is running", "resume", "racy")
             self.assertIn("nothing to do", self.ok("resume", "racy", "--if-dead"))
+            self.refused("of racy is running", "done", "racy")
+            self.refused("of racy is running", "dispatch", "racy", "--cwd", self.repo)
             self.assertEqual(self.unchanged("racy"), snap)
+            self.kill("other")
+            self.resume("other")  # another name isn't held up
         self.resume("racy")
         self.assertIsNotNone(self.agent("racy"))
+
+    def test_the_lock_is_let_go_after_a_failure(self):
+        self.dispatch("fails", "--cwd", self.repo)
+        self.kill("fails")
+        rc, _ = self.bowery("resume", "fails", env={"FAKE_PROMPT_FAIL": "1"})
+        self.assertNotEqual(rc, 0)
+        self.kill("fails")
+        self.resume("fails")
+
+    def test_a_refused_resume_leaves_the_state_folder_as_it_was(self):
+        self.dispatch("st", "--cwd", self.repo)
+        before = self.state_files()
+        self.refused("still alive", "resume", "st")
+        self.kill("st")
+        self.ok("resume", "st", "--dry-run")
+        self.refused("no dispatch record", "resume", "nobody")
+        self.assertEqual(self.state_files(), before)
+        self.assertFalse(any((self.state / "locks").glob("nobody.*")), "no lock for a name with no record")
+
+    def test_not_within_reads_every_stamp_and_never_hides_a_refusal(self):
+        self.dispatch("stamp", "--cwd", self.repo)
+        self.kill("stamp")
+        f = self.records("stamp")[0]
+        rec = json.loads(f.read_text())
+        rec["resumed"] = "yesterday-ish"
+        f.write_text(json.dumps(rec))
+        self.refused("can't read", "resume", "stamp", "--not-within", "10m", "--if-dead")
+        rec["resumed"] = "2999-01-01T00:00:00+00:00"  # a clock that ran ahead
+        f.write_text(json.dumps(rec))
+        self.assertIn("within --not-within", self.ok("resume", "stamp", "--not-within", "10m", "--if-dead"))
+        # Too soon AND its directory gone: the refusal wins, even under --if-dead.
+        d = self.t / "gone-dir"
+        d.mkdir()
+        rec["cwd"] = str(d)
+        f.write_text(json.dumps(rec))
+        d.rmdir()
+        self.refused("which is gone", "resume", "stamp", "--not-within", "10m", "--if-dead")
 
     # ------------------------------------------------------------ orphans and list
 

@@ -615,7 +615,19 @@ func cmdDone(argv []string) {
 		if err == nil && strings.Contains(t, "/") {
 			t, err = hostPath(t)
 		}
-		if err == nil {
+		if err == nil && nameRE.MatchString(t) {
+			// Not while a resume or dispatch of the same name is under way.
+			unlock, held, lerr := nameLock(t)
+			switch {
+			case lerr != nil:
+				err = lerr
+			case held:
+				err = refuse("a resume, dispatch or done of %s is running", t)
+			default:
+				err = doneOne(t, o)
+				unlock()
+			}
+		} else if err == nil {
 			err = doneOne(t, o)
 		}
 		var rf *Refused

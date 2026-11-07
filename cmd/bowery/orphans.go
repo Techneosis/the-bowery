@@ -158,6 +158,7 @@ func findOrphans() ([]orphan, error) {
 				}
 			}
 			whose, note, owner := "", "", ""
+			resOK, resN := false, 0
 			switch {
 			case len(owners) > 0:
 				owner = owners[0].name
@@ -165,6 +166,7 @@ func findOrphans() ([]orphan, error) {
 				if r := recs[owner]; r != nil {
 					if ok, _ := resumable(r); ok {
 						note += fmt.Sprintf("; bowery resume %s can still use it, done ends that", owner)
+						resOK, resN = true, r.Resumes
 					}
 				}
 				whose = "  (" + note + ")"
@@ -179,7 +181,8 @@ func findOrphans() ([]orphan, error) {
 			merged := state == "merged"
 			out = append(out, orphan{kind: "worktree", target: path,
 				line: fmt.Sprintf("%s  [%s, %s]  no pane is in it%s", path, b, state, whose),
-				Name: owner, Path: path, Repo: info.repo, Branch: info.branch, Merged: &merged, State: state, Note: note})
+				Name: owner, Path: path, Repo: info.repo, Branch: info.branch, Merged: &merged, State: state, Note: note,
+				Resumable: resOK, Resumes: resN})
 		}
 	}
 	for _, ws := range all {
@@ -413,7 +416,11 @@ func cmdList(argv []string) {
 				if alive[r.Name] {
 					continue
 				}
-				if ok, err := resumable(r); err == nil && ok {
+				ok, err := resumable(r)
+				if err != nil {
+					warn("%s: can't tell whether it can be resumed: %v", r.Name, herdrMsg(err))
+				}
+				if ok {
 					note := "bowery resume " + r.Name
 					if r.Resumes > 0 {
 						note += fmt.Sprintf("  (resumed %d time(s))", r.Resumes)
@@ -427,6 +434,7 @@ func cmdList(argv []string) {
 			}
 			found, err := findOrphans()
 			if err != nil {
+				warn("couldn't count orphans: %v", herdrMsg(err))
 				return 0, nil
 			}
 			return len(found), nil

@@ -112,21 +112,7 @@ func cmdResume(argv []string) {
 	if err := pickMachine(name, explicit); err != nil {
 		die("resume: %v", herdrMsg(err))
 	}
-	// One resume of a name at a time: two callers (two letters arriving at
-	// once) can't both pass "is it alive?" before either starts it.
-	unlock, held, err := resumeLock(name)
-	if err != nil {
-		die("resume %s: %v", name, err)
-	}
-	if held {
-		if o.ifDead {
-			say("%s: another resume of it is running; nothing to do", name)
-			return
-		}
-		die("resume %s: refused, nothing changed: another resume of %s is running", name, name)
-	}
-	defer unlock()
-	err = resumeOne(name, o)
+	err := resumeOne(name, o)
 	var rf *Refused
 	var sk *skipped
 	switch {
@@ -160,6 +146,24 @@ func resumeOne(name string, o resumeOpts) error {
 		}
 		return refuse("no dispatch record for %s%s; resume only brings back an agent bowery dispatched", name, where)
 	}
+	// One of resume, dispatch or done on a name at a time: two callers (two
+	// letters arriving at once) can't both find it dead and start it.
+	unlock, held, err := nameLock(name)
+	if err != nil {
+		return err
+	}
+	if held {
+		if o.ifDead {
+			return &skipped{"another resume, dispatch or done of it is running"}
+		}
+		return refuse("another resume, dispatch or done of %s is running", name)
+	}
+	defer unlock()
+	if r := loadRecord(name); r != nil {
+		rec = r // as it is now we hold the lock
+	} else {
+		return refuse("%s's dispatch record went while waiting (a done ran)", name)
+	}
 
 	// ---- checks; nothing is changed, not even a record file, until all pass
 	if rec.Kind != "" && rec.Kind != "claude" {
@@ -189,15 +193,6 @@ func resumeOne(name string, o resumeOpts) error {
 				return &skipped{fmt.Sprintf("it's alive (%s, in %s)", a.AgentStatus, a.PaneID)}
 			}
 			return refuse("%s is still alive (%s, in %s); nothing to resume", name, a.AgentStatus, a.PaneID)
-		}
-	}
-	if o.notWithin > 0 && rec.Resumed != "" {
-		if t, err := time.Parse("2006-01-02T15:04:05-07:00", rec.Resumed); err == nil && time.Since(t) < o.notWithin {
-			why := fmt.Sprintf("it was resumed %s ago, within --not-within %s", time.Since(t).Round(time.Second), o.notWithin)
-			if o.ifDead {
-				return &skipped{why}
-			}
-			return refuse("%s", why)
 		}
 	}
 	if rec.Session == "" {
@@ -266,6 +261,25 @@ func resumeOne(name string, o resumeOpts) error {
 	at, err := checkoutAt(cwd)
 	if err != nil {
 		return err
+	}
+	// Last of the checks, so that under --if-dead a "too soon" never hides
+	// a refusal that needs a person.
+	if o.notWithin > 0 && rec.Resumed != "" {
+		t, ok := parseStamp(rec.Resumed)
+		if !ok {
+			return refuse("%s's record says it was resumed at %q, which bowery can't read, so --not-within can't be checked", name, rec.Resumed)
+		}
+		ago := time.Since(t)
+		if ago < 0 {
+			ago = 0 // a clock that ran ahead: count it as just now
+		}
+		if ago < o.notWithin {
+			why := fmt.Sprintf("it was resumed %s ago, within --not-within %s", ago.Round(time.Second), o.notWithin)
+			if o.ifDead {
+				return &skipped{why}
+			}
+			return refuse("%s", why)
+		}
 	}
 
 	agentArgs := []string{"--"}
@@ -435,13 +449,26 @@ type skipped struct{ why string }
 
 func (s *skipped) Error() string { return s.why }
 
-// resumeLock takes the per-name resume lock without waiting. held is true
-// when another resume of the name has it.
-func resumeLock(name string) (unlock func(), held bool, err error) {
-	if err := os.MkdirAll(stateDir(), 0o755); err != nil {
-		return nil, false, err
+// parseStamp reads a record's time, in the forms bowery has written.
+func parseStamp(s string) (time.Time, bool) {
+	for _, layout := range []string{"2006-01-02T15:04:05-07:00", time.RFC3339Nano, time.RFC3339} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t, true
+		}
 	}
-	p := filepath.Join(stateDir(), "."+name+"."+serverTag()+".resume.lock")
+	return time.Time{}, false
+}
+
+// nameLock takes the lock on a name, per server, without waiting: resume,
+// dispatch and done hold it while they check and change that agent. held
+// is true when another of them has it. Lock files live in the state dir's
+// locks/ folder and stay there (removing one would race a waiter).
+func nameLock(name string) (unlock func(), held bool, err error) {
+	dir := filepath.Join(stateDir(), "locks")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, false, fail("lock: %v", err)
+	}
+	p := filepath.Join(dir, name+"."+serverTag()+".lock")
 	f, err := os.OpenFile(p, os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		return nil, false, fail("resume lock: %v", err)

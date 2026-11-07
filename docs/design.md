@@ -211,9 +211,14 @@ into: closed if bowery made it, else left with a warning.
 "another resume of it is running" a quiet exit 0 rather than a refusal,
 so a caller needs no checks of its own; every other refusal still fails.
 `--not-within DUR` refuses an agent resumed that recently, so a seat that
-dies on start can't be restarted every minute. One resume of a name runs
-at a time (a lock per name and server, taken without waiting), so two
-callers can't both find it dead and start it twice.
+dies on start can't be restarted every minute. It's the last check, so
+under `--if-dead` "too soon" never hides a refusal a person needs to see;
+a `resumed` time bowery can't read is a refusal, and one in the future
+counts as just now. `resume`, `dispatch` and `done` of a name each hold a
+lock on it (per name and server, taken without waiting, once the record is
+known), so a hook's resume can't race another resume, a dispatch or a
+done of the same agent. The lock files live in the state dir's `locks/`
+folder and stay there: removing one would race the next taker.
 
 Only a record makes an agent resumable: an agent bowery didn't dispatch (a
 pane another tool started) has none, and is out of reach.

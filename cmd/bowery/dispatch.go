@@ -175,6 +175,16 @@ func cmdDispatch(argv []string) {
 		}
 	}
 
+	// Not while a resume or done of the same name is under way.
+	unlockName, held, err := nameLock(name)
+	if err != nil {
+		die("%v", err)
+	}
+	if held {
+		die("dispatch %s: refused, nothing changed: a resume, dispatch or done of %s is running", name, name)
+	}
+	defer unlockName() // and keeps the lock's file referenced until dispatch ends
+
 	// Args handed through to the agent executable (after --). Bypassing
 	// permissions is the default: a dispatched pane is unwatched, so a
 	// permission prompt wedges it silently. The flag is claude's; other kinds
