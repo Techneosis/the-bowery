@@ -489,6 +489,7 @@ class Resume(Bed):
         self.assertNotEqual(rc, 0, out)
         self.assertIn(f"not {sess}", out)
         self.assertEqual(self.record("drops")["session"], sess, "the record keeps its conversation")
+        self.assertNotIn("drops", self.agent_names(), "the wrong claude doesn't keep the agent's name")
         self.assertIsNone(self.agent("drops"))
         self.assertIsNone(self.swarm(), "the tab it made is taken back")
 
@@ -499,6 +500,12 @@ class Resume(Bed):
         self.assertNotEqual(rc, 0, out)
         self.assertIn(f"was run in your pane {p['pane_id']}", out)
         self.assertIsNotNone(self.pane(p["pane_id"]), "the person's pane is left open")
+        # Failing before anything is typed says nothing of the kind.
+        with self.mutate() as s:
+            next(x for x in s["panes"] if x["pane_id"] == p["pane_id"])["busy"] = "vim"
+        rc, out = self.bowery("dispatch", "inmine2", "--pane", p["pane_id"], "--launcher", str(bad), "--timeout", "1000")
+        self.assertNotEqual(rc, 0, out)
+        self.assertNotIn("was run in your pane", out)
 
     def test_a_failed_launcher_in_its_own_pane_is_undone_safely(self):
         a = self.dispatch("own2", "--cwd", self.repo)
@@ -509,6 +516,16 @@ class Resume(Bed):
         self.assertIn("must exec claude", out)
         self.assertIsNotNone(self.pane(a["pane_id"]), "a bare shell is left as it was")
         self.assertNotIn("launcher", self.record("own2"), "nothing recorded")
+
+    def test_a_stored_launcher_is_checked_again(self):
+        self.dispatch("stored", "--cwd", self.repo)
+        self.kill("stored")
+        f = self.records("stored")[0]
+        rec = json.loads(f.read_text())
+        rec["launcher"] = "seat\x1b[2J stored"  # written by hand, or by an older bowery
+        f.write_text(json.dumps(rec))
+        self.refused("recorded launcher takes one plain command line", "resume", "stored")
+        self.ok("resume", "stored", "--no-launcher")
 
     def test_a_launcher_needs_claude(self):
         self.refused("only supported with --kind claude", "dispatch", "cx2", "--kind", "codex", "--launcher", "x")

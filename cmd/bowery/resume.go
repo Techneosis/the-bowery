@@ -237,6 +237,11 @@ func resumeOne(name string, o resumeOpts) error {
 		launcher = ""
 	case o.launcher != "":
 		launcher = o.launcher
+	case launcher != "":
+		// A stored line is typed into a shell too: it gets the same check.
+		if why := launcherProblem(launcher); why != "" {
+			return refuse("%s's recorded launcher %s; resume with --launcher CMD or --no-launcher", name, why)
+		}
 	}
 	where := l.why
 	cd := l.placement == "pane" && norm(cur.Cwd) != norm(cwd)
@@ -303,8 +308,10 @@ func resumeOne(name string, o resumeOpts) error {
 	case "workspace":
 		rec.Placement, rec.CreatedPane, rec.Owns = "workspace", true, &Owns{Kind: "workspace", ID: p.WorkspaceID}
 	}
-	if s := sessionIn(p.PaneID); s != "" {
-		rec.Session = s
+	// The session stays the record's: claude --resume keeps its id, and
+	// only one that matches is confirmation.
+	if s := sessionIn(p.PaneID); s != rec.Session {
+		warn("couldn't confirm %s's session in %s (herdr reports %q); the record keeps %s", name, p.PaneID, s, rec.Session)
 	}
 	rec.Cwd, rec.Gated, rec.Launcher = cwd, gated, launcher
 	rec.Resumed, rec.Resumes = nowISO(), rec.Resumes+1

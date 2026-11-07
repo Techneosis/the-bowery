@@ -74,8 +74,9 @@ that starts claude on another session than the one asked for (one that
 drops claude's arguments, say) is refused before anything is recorded. The
 line is typed into a shell, so it must be one plain line: not empty, no
 control or format characters, and not an option taken by mistake
-(`--launcher=VALUE` for a command that really starts with `-`). `--timeout`
-is the whole start's total. The launcher is recorded,
+(`--launcher=VALUE` for a command that really starts with `-`). For a launcher start,
+`--timeout` is the whole start's total. A resume keeps the record's session
+unless herdr confirms the same one, and says so when it can't. The launcher is recorded,
 so `resume` starts the agent through it again; `resume --launcher CMD` sets
 one and `--no-launcher` drops it.
 

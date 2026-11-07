@@ -234,7 +234,7 @@ func cmdDispatch(argv []string) {
 	pane, err := startAgent(name, o, from, here, agentArgs, rec, &also, m)
 	if err != nil {
 		undoStart(m)
-		if o.placement == "pane" && o.launcher != "" {
+		if o.placement == "pane" && m.typed {
 			// The launcher line ran in the person's own pane: say so, and
 			// type nothing more there.
 			warn("the launcher line was run in your pane %s; look at what it left there", o.pane)
@@ -290,6 +290,7 @@ func cmdDispatch(argv []string) {
 // made is what a start created, to take back if it fails.
 type made struct {
 	pane, worktree, branch, repo string
+	typed                        bool // a launcher line was sent to the pane
 }
 
 func currentPane() (string, error) {
@@ -438,7 +439,7 @@ func startAgent(name string, o startOpts, from, here string, agentArgs []string,
 	timeoutMS := 60000
 	fmt.Sscan(o.timeout, &timeoutMS)
 	if o.launcher != "" {
-		return pane, launchAgent(name, pane, o.launcher, agentArgs, timeoutMS)
+		return pane, launchAgent(name, pane, o.launcher, agentArgs, timeoutMS, m)
 	}
 	for attempt := 1; ; attempt++ {
 		err := herdr(nil, append([]string{"agent", "start", name, "--kind", o.kind, "--pane", pane, "--timeout", o.timeout}, agentArgs...)...)
@@ -495,15 +496,23 @@ func launcherArg(argv []string, i int) (string, int) {
 			die("--launcher needs a command, not the option %s (use --launcher=%s if that really is the command)", v, v)
 		}
 	}
+	if why := launcherProblem(v); why != "" {
+		die("--launcher %s", why)
+	}
+	return v, used
+}
+
+// launcherProblem says what's wrong with a launcher line, or "".
+func launcherProblem(v string) string {
 	if strings.TrimSpace(v) == "" {
-		die("--launcher needs a command; it's empty")
+		return "needs a command; it's empty"
 	}
 	for _, r := range v {
 		if unicode.IsControl(r) || unicode.In(r, unicode.Cf) {
-			die("--launcher takes one plain command line: it has a control character (%U)", r)
+			return fmt.Sprintf("takes one plain command line: it has a control character (%U)", r)
 		}
 	}
-	return v, used
+	return ""
 }
 
 // launchAgent starts the agent through a launcher instead of `herdr agent
@@ -512,7 +521,7 @@ func launcherArg(argv []string, i int) (string, int) {
 // wrapper that sets up its environment, say). bowery then waits for herdr to
 // see a claude agent in that pane, names it, and answers the trust dialog as
 // a plain start does.
-func launchAgent(name, pane, launcher string, agentArgs []string, timeoutMS int) error {
+func launchAgent(name, pane, launcher string, agentArgs []string, timeoutMS int, m *made) error {
 	args := agentArgs
 	if len(args) > 0 && args[0] == "--" {
 		args = args[1:]
@@ -550,6 +559,7 @@ func launchAgent(name, pane, launcher string, agentArgs []string, timeoutMS int)
 	if len(args) > 0 {
 		line += " " + shJoin(args...)
 	}
+	m.typed = true // from here the line may have reached the shell
 	if err := herdr(nil, "pane", "run", pane, line); err != nil {
 		return err
 	}
@@ -585,9 +595,9 @@ func launchAgent(name, pane, launcher string, agentArgs []string, timeoutMS int)
 		// A launcher that dropped claude's arguments, or resumed something
 		// else, must not pass for this agent's conversation.
 		if got := sessionIn(pane); got != "" && got != want {
+			// Not this agent's conversation: don't leave it under its name.
+			_ = herdr(nil, "agent", "rename", pane, "--clear")
 			return fail("the launcher started claude on session %s in %s, not %s (does it pass its arguments on to claude?)", got, pane, want)
-		} else if got == "" {
-			warn("couldn't confirm the session of the claude in %s; check it's %s", pane, want)
 		}
 	}
 	if err := herdr(nil, "agent", "wait", name, "--until", "idle", "--until", "blocked", "--timeout", fmt.Sprint(left())); err != nil {
