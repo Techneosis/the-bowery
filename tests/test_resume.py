@@ -642,6 +642,50 @@ class Resume(Bed):
         d.rmdir()
         self.refused("which is gone", "resume", "stamp", "--not-within", "10m", "--if-dead")
 
+    # ------------------------------------------------------------ --fresh
+
+    def test_fresh_starts_a_new_conversation_where_it_was(self):
+        self.dispatch("anew", "--worktree", "anew", "--cwd", self.repo)
+        old = self.record("anew")["session"]
+        self.kill("anew")
+        self.assertIn("in a new conversation", self.ok("resume", "anew", "--fresh", "--dry-run"))
+        self.resume("anew", "--fresh", "--", "3 unread letters")
+        a = self.agent("anew")
+        self.assertEqual(a["args"], ["--dangerously-skip-permissions"], "no --resume")
+        self.assertEqual(self.pane(a["pane_id"])["cwd"], str(self.wt / "repo" / "anew"), "in its own worktree")
+        text = a["prompts"][0]["text"]
+        self.assertTrue(text.startswith("You were started again in a new conversation"))
+        self.assertTrue(text.endswith("\n\n3 unread letters"))
+        rec = self.record("anew")
+        self.assertNotEqual(rec["session"], old)
+        self.assertEqual(rec["session"], a["session"], "the record follows the new conversation")
+        self.assertEqual(rec["resumes"], 1, "counted, so --not-within still guards it")
+
+    def test_fresh_needs_no_session_but_refuses_while_the_old_one_lives(self):
+        self.dispatch("nosess", "--cwd", self.repo)
+        sess = self.record("nosess")["session"]
+        self.kill("nosess")
+        p = self.new_workspace("elsewhere", str(self.repo))
+        self.start_by_hand("copy", p["pane_id"], "--", "--resume", sess)
+        self.refused("can't run twice", "resume", "nosess", "--fresh")
+        self.herdr("pane", "close", p["pane_id"])
+        f = self.records("nosess")[0]
+        rec = json.loads(f.read_text())
+        rec.pop("session")
+        f.write_text(json.dumps(rec))
+        self.refused("has no session id", "resume", "nosess")
+        self.resume("nosess", "--fresh")
+        self.assertTrue(self.record("nosess")["session"])
+
+    def test_fresh_goes_through_the_launcher_and_keeps_the_guards(self):
+        seat = self.launcher()
+        self.dispatch("fseat", "--cwd", self.repo, "--launcher", f"{seat} fseat")
+        self.kill("fseat")
+        self.resume("fseat", "--fresh", "--if-dead", "--not-within", "10m")
+        self.assertEqual(self.agent("fseat")["env"].get("SEAT_BOX"), "box-fseat")
+        self.kill("fseat")
+        self.assertIn("nothing to do", self.ok("resume", "fseat", "--fresh", "--if-dead", "--not-within", "10m"))
+
     # ------------------------------------------------------------ orphans and list
 
     def test_orphans_shows_an_agent_that_quit_to_its_shell(self):

@@ -206,7 +206,9 @@ if the work isn't finished.
 **From a hook or a job** (start a seat when mail comes):
 `bowery resume <name> --if-dead --not-within 10m -- "<why>"`. `--if-dead`
 does nothing when it's alive or already being resumed; `--not-within` keeps
-a seat that keeps dying from being restarted in a loop.
+a seat that keeps dying from being restarted in a loop. `--fresh` starts it
+in a new conversation instead (a long-idle seat whose old context would cost
+more to reload than it's worth).
 
 If a resume fails after the agent started ("is running again in ..."), the
 record already points at it: send the notice yourself, or `done` it.

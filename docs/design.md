@@ -231,6 +231,13 @@ failed sound tag or prompt says the agent is up and recorded, and prints
 its JSON line. The lock files live in the state dir's `locks/`
 folder and stay there: removing one would race the next taker.
 
+`--fresh` starts the agent again in a **new** conversation instead, with
+the same checks, lock, landing and launcher, and a notice that says its
+earlier conversation isn't loaded. It needs no session on the record (but is
+refused while the old session is live somewhere), and the record takes the
+new session, once herdr confirms it, so the next plain resume continues the
+fresh one. It counts as a resume, so `--not-within` still guards it.
+
 Only a record makes an agent resumable: an agent bowery didn't dispatch (a
 pane another tool started) has none, and is out of reach.
 

@@ -19,6 +19,12 @@ const resumeNotice = "You were resumed: check what you already did before redoin
 	"Anything that costs money or can't be undone (paid work you placed, a message you sent, a release you published) " +
 	"is checked for, not done again."
 
+// freshNotice is the first thing an agent started again in a new
+// conversation (--fresh) is told: it remembers nothing of its last one.
+const freshNotice = "You were started again in a new conversation; your earlier one isn't loaded. " +
+	"Check what's already done (your checkout, your notes, your mail) before redoing anything. " +
+	"Anything that costs money or can't be undone is checked for, not done again."
+
 type resumeOpts struct {
 	placement, timeout string
 	gated              string // "", "gated" or "ungated": overrides what the record says
@@ -26,12 +32,13 @@ type resumeOpts struct {
 	noLauncher         bool   // start with herdr agent start, dropping the record's launcher
 	dryRun             bool
 	ifDead             bool          // a no-op (exit 0) when the agent is alive or being resumed
+	fresh              bool          // start it on a new conversation instead of resuming its session
 	notWithin          time.Duration // refuse if it was resumed this recently
 	prompt             []string
 }
 
 const resumeUsage = "bowery resume <name> [--swarm|--workspace] [--gated|--ungated] [--launcher CMD|--no-launcher] " +
-	"[--if-dead] [--not-within DUR] [--machine LABEL] [--timeout MS] [--dry-run] [-- <prompt>]"
+	"[--fresh] [--if-dead] [--not-within DUR] [--machine LABEL] [--timeout MS] [--dry-run] [-- <prompt>]"
 
 func cmdResume(argv []string) {
 	// Everything after a literal -- is the prompt, flags and all.
@@ -67,6 +74,8 @@ func cmdResume(argv []string) {
 			o.noLauncher = true
 		case "--if-dead":
 			o.ifDead = true
+		case "--fresh":
+			o.fresh = true
 		case "--not-within":
 			if i+1 >= len(argv) {
 				die("--not-within needs a duration (10m, 1h)")
@@ -195,12 +204,12 @@ func resumeOne(name string, o resumeOpts) error {
 			return refuse("%s is still alive (%s, in %s); nothing to resume", name, a.AgentStatus, a.PaneID)
 		}
 	}
-	if rec.Session == "" {
+	if rec.Session == "" && !o.fresh {
 		return refuse("%s's record has no session id (dispatched by an older bowery, and never seen alive since); "+
 			"dispatch it again instead", name)
 	}
 	for _, a := range ags {
-		if a.SessionID() == rec.Session {
+		if rec.Session != "" && a.SessionID() == rec.Session {
 			who := a.Name
 			if who == "" {
 				who = "an unnamed agent"
@@ -290,7 +299,9 @@ func resumeOne(name string, o resumeOpts) error {
 	if rec.Model != "" {
 		agentArgs = append(agentArgs, "--model", rec.Model)
 	}
-	agentArgs = append(agentArgs, "--resume", rec.Session)
+	if !o.fresh {
+		agentArgs = append(agentArgs, "--resume", rec.Session)
+	}
 
 	launcher := rec.Launcher
 	switch {
@@ -324,7 +335,11 @@ func resumeOne(name string, o resumeOpts) error {
 		if launcher != "" {
 			via = ", through " + launcher
 		}
-		say("[dry-run] would resume %s (session %s, %s%s) in %s, %s, and send it the resume notice", name, rec.Session, perm, via, cwd, where)
+		if o.fresh {
+			say("[dry-run] would start %s again in a new conversation (%s%s) in %s, %s, and send it the fresh-start notice", name, perm, via, cwd, where)
+		} else {
+			say("[dry-run] would resume %s (session %s, %s%s) in %s, %s, and send it the resume notice", name, rec.Session, perm, via, cwd, where)
+		}
 		return nil
 	}
 
@@ -369,9 +384,19 @@ func resumeOne(name string, o resumeOpts) error {
 	case "workspace":
 		rec.Placement, rec.CreatedPane, rec.Owns = "workspace", true, &Owns{Kind: "workspace", ID: p.WorkspaceID}
 	}
-	// The session stays the record's: claude --resume keeps its id, and
-	// only one that matches is confirmation.
-	if s := sessionIn(p.PaneID); s != rec.Session {
+	if o.fresh {
+		// A new conversation: the record takes its session, once herdr names
+		// one that isn't the old.
+		old := rec.Session
+		if s := sessionIn(p.PaneID); s != "" && s != old {
+			rec.Session = s
+		} else {
+			warn("couldn't confirm %s's new session in %s (herdr reports %q); a list or watch will record it", name, p.PaneID, s)
+			rec.Session = ""
+		}
+	} else if s := sessionIn(p.PaneID); s != rec.Session {
+		// The session stays the record's: claude --resume keeps its id, and
+		// only one that matches is confirmation.
 		warn("couldn't confirm %s's session in %s (herdr reports %q); the record keeps %s", name, p.PaneID, s, rec.Session)
 	}
 	rec.Cwd, rec.Gated, rec.Launcher = cwd, gated, launcher
@@ -385,6 +410,9 @@ func resumeOne(name string, o resumeOpts) error {
 		sound = "off"
 	}
 	msg := resumeNotice
+	if o.fresh {
+		msg = freshNotice
+	}
 	if at != "" {
 		msg += " " + at
 	}
