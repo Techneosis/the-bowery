@@ -12,7 +12,9 @@ Code setup.
 | `cmd/bowery/` | the whole tool, in Go: one static binary (`CGO_ENABLED=0`) |
 | `cmd/bowery/dispatch.go` | `dispatch`: worktree, pane, identity, agent start, trust dialog, tag, record; `swarm-tab` |
 | `cmd/bowery/done.go` | `done` (checks, then teardown) and `adopt` |
-| `cmd/bowery/orphans.go` | `orphans`, `list`, `mute`/`unmute` |
+| `cmd/bowery/orphans.go` | `orphans` (read-only), `list`, `mute`/`unmute` |
+| `cmd/bowery/resume.go` | `resume`: its checks, where it lands, the hands-off check |
+| `cmd/bowery/watch.go` | `watch`: the background watcher and its kinds |
 | `cmd/bowery/herdr.go` | the herdr CLI and socket, and the group-safe pane close |
 | `cmd/bowery/machine.go` | `--machine`: the current server, ssh, paths on the box |
 | `cmd/bowery/records.go` | dispatch records, and which server a name lives on |

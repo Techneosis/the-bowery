@@ -62,7 +62,33 @@ class Resume(Bed):
         with self.mutate() as s:
             s["agents"]["fresh"]["session"] = "again"
         self.ok("orphans")
+        self.ok("orphans", "--json")
+        self.assertEqual(self.record("fresh")["session"], "after-clear", "orphans is read-only")
+        self.ok("list")
         self.assertEqual(self.record("fresh")["session"], "again")
+
+    def test_a_refused_or_dry_run_resume_writes_no_record_at_all(self):
+        self.dispatch("other", "--cwd", self.repo)
+        self.dispatch("dry2", "--cwd", self.repo)
+        self.kill("dry2")
+        with self.mutate() as s:
+            s["agents"]["other"]["session"] = "after-clear"
+        files = {f.name: f.read_text() for f in self.records()}
+        self.ok("resume", "dry2", "--dry-run")
+        self.refused("still alive", "resume", "other")
+        self.assertEqual({f.name: f.read_text() for f in self.records()}, files, "not even another agent's record")
+
+    def test_an_old_record_without_a_terminal_id_takes_no_namesakes_session(self):
+        self.dispatch("legacy", "--cwd", self.repo)
+        f = self.records("legacy")[0]
+        rec = json.loads(f.read_text())
+        rec.pop("terminal_id")
+        f.write_text(json.dumps(rec))
+        self.kill("legacy")
+        p = self.new_workspace("elsewhere", str(self.repo))
+        self.start_by_hand("legacy", p["pane_id"])
+        self.ok("list")
+        self.assertEqual(json.loads(f.read_text())["session"], rec["session"])
 
     def test_a_namesake_in_another_terminal_does_not_overwrite_the_session(self):
         self.dispatch("same", "--cwd", self.repo)
@@ -269,7 +295,82 @@ class Resume(Bed):
         self.config.write_text('hands_off_env = ["SOMETHING_ELSE"]\n')
         self.ok("resume", "marked")
 
+    def test_a_failure_after_the_start_still_records_where_the_agent_is(self):
+        self.dispatch("late", "--cwd", self.repo)
+        self.kill("late")
+        rc, out = self.bowery("resume", "late", env={"FAKE_PROMPT_FAIL": "1"})
+        self.assertNotEqual(rc, 0)
+        self.assertIn("is running again in", out)
+        a = self.agent("late")
+        rec = self.record("late")
+        self.assertEqual((rec["pane_id"], rec["terminal_id"]), (a["pane_id"], self.pane(a["pane_id"])["terminal_id"]))
+        self.assertEqual(rec["resumes"], 1)
+        self.ok("done", "late", "--force")
+        self.assertEqual(self.swarm(), None, "done owns the new tab: nothing left")
+
+    def test_a_new_place_is_refused_while_the_old_one_is_open(self):
+        a = self.dispatch("stay", "--cwd", self.repo)
+        self.exit_to_shell("stay")
+        snap = self.unchanged("stay")
+        self.refused("still open", "resume", "stay", "--swarm")
+        self.assertEqual(self.unchanged("stay"), snap)
+        self.assertEqual(self.resume("stay")["pane_id"], a["pane_id"])
+
+    def test_bad_options_are_refused_before_anything(self):
+        self.dispatch("opts", "--cwd", self.repo)
+        self.kill("opts")
+        snap = self.unchanged("opts")
+        self.refused("milliseconds", "resume", "opts", "--timeout", "10s")
+        self.refused("pick one", "resume", "opts", "--swarm", "--workspace")
+        self.assertEqual(self.unchanged("opts"), snap)
+
+    def test_the_prompt_is_taken_whole_and_options_may_come_first(self):
+        self.dispatch("words", "--cwd", self.repo)
+        self.kill("words")
+        self.ok("resume", "--swarm", "words", "--", "check", "--machine", "x", "--dry-run")
+        a = self.agent("words")
+        self.assertTrue(a["prompts"][0]["text"].endswith("\n\ncheck --machine x --dry-run"))
+
+    def test_an_older_record_must_say_whether_it_was_gated(self):
+        self.dispatch("pre", "--cwd", self.repo, "--gated")
+        f = self.records("pre")[0]
+        rec = json.loads(f.read_text())
+        for k in ("cwd", "gated", "model"):
+            rec.pop(k, None)
+        rec["worktree"] = str(self.repo)  # an older record: its directory was its worktree
+        f.write_text(json.dumps(rec))
+        self.kill("pre")
+        self.refused("whether it was --gated", "resume", "pre")
+        self.resume("pre", "--gated")
+        self.assertEqual(self.agent("pre")["args"], ["--resume", rec["session"]], "prompts on, as asked")
+        self.assertTrue(self.record("pre")["gated"])
+
+    def test_a_split_beside_a_marked_neighbour_is_not_refused(self):
+        self.config.write_text('hands_off_env = ["OTHER_TOOL_TAG"]\n')
+        self.dispatch("keep2", "--cwd", self.repo)
+        a = self.dispatch("nb", "--cwd", self.repo)
+        shell = self.split_off(a["pane_id"])
+        proc = subprocess.Popen(["sleep", "300"], env={**os.environ, "OTHER_TOOL_TAG": "x-1"})
+        self.addCleanup(proc.wait)
+        self.addCleanup(proc.kill)
+        with self.mutate() as s:
+            next(p for p in s["panes"] if p["pane_id"] == shell["pane_id"])["pid"] = proc.pid
+        self.herdr("pane", "close", a["pane_id"])
+        out = self.resume("nb")
+        self.assertEqual(out["tab_id"], a["tab_id"], "a fresh pane of its own, in its own tab")
+
+    def test_a_bad_hands_off_name_is_a_config_error(self):
+        self.config.write_text('hands_off_env = [""]\n')
+        self.refused("not an environment variable name", "config")
+
     # ------------------------------------------------------------ orphans and list
+
+    def test_orphans_shows_an_agent_that_quit_to_its_shell(self):
+        self.dispatch("quit2", "--cwd", self.repo)
+        self.exit_to_shell("quit2")
+        out = self.ok("orphans")
+        self.assertIn("quit2: agent gone, its pane still open  (bowery resume quit2; done ends that)", out)
+        self.assertRegex(self.ok("list"), r"gone\s+quit2\s+bowery resume quit2")
 
     def test_orphans_and_list_say_who_can_be_resumed(self):
         self.dispatch("idle1", "--cwd", self.repo)
@@ -278,7 +379,8 @@ class Resume(Bed):
         out = self.ok("orphans")
         self.assertIn("finished dispatched agents still alive (done <name>):", out, "the heading other tools parse")
         self.assertRegex(out, r"\n  idle1  idle  \S+  \S+", "the agent line's shape is kept")
-        self.assertIn("dead: agent gone, its worktree still there  (bowery resume dead)", out)
+        self.assertIn("dead: agent gone, its worktree still there  (bowery resume dead; done ends that)", out)
+        self.assertIn("now gone; bowery resume dead can still use it, done ends that)", out)
         listed = self.ok("list")
         self.assertRegex(listed, r"gone\s+dead\s+bowery resume dead")
 
@@ -328,6 +430,26 @@ class RemoteResume(Resume.__base__):
         self.assertEqual(json.loads(self.records("far")[0].read_text())["resumes"], 1)
         self.ok("done", "far", "--force")
         self.assertIsNone(self.agent("far", BOX))
+
+    def test_unreachable_box_is_marked_in_orphans_json(self):
+        self.far()
+        self.env["FAKE_SSH_HOSTS"] = ""
+        out = self.ok("orphans", "--json")
+        js, _ = json.JSONDecoder().raw_decode(out)
+        self.assertEqual([(o["kind"], o["machine"]) for o in js], [("unreachable", BOX)])
+        self.assertIn("unreachable", out[out.index("]"):], "and a warning")
+
+    def test_refused_when_its_identity_command_is_gone(self):
+        self.far()
+        self.config.write_text(f"[machines.{BOX}]\n")
+        self.refused("no identity_command", "resume", "far")
+        self.assertIsNone(self.agent("far", BOX))
+
+    def test_checks_on_the_box_run_as_its_identity(self):
+        self.far()
+        open(self.box / "as.log", "w").close()
+        self.ok("resume", "far", "--dry-run")
+        self.assertIn("test -d", (self.box / "as.log").read_text(), "the directory test ran as alice")
 
     def test_refusals_on_the_box(self):
         self.dispatch("near", "--machine", BOX, "--as", "alice", "--cwd", "~/dev/app")

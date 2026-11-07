@@ -79,15 +79,12 @@ func findOrphans() ([]orphan, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Read-only: sessions are refreshed in memory, never written back.
 	recs := map[string]*Record{}
 	var names []string
-	for _, r := range allRecords() {
+	for _, r := range withFreshSessions(ags) {
 		recs[r.Name] = r
 		names = append(names, r.Name)
-	}
-	refreshSessions(ags)
-	for _, r := range allRecords() {
-		recs[r.Name] = r
 	}
 	var out []orphan
 	for _, a := range ags {
@@ -165,6 +162,11 @@ func findOrphans() ([]orphan, error) {
 			case len(owners) > 0:
 				owner = owners[0].name
 				note = fmt.Sprintf("dispatched to %s, now gone", owner)
+				if r := recs[owner]; r != nil {
+					if ok, _ := resumable(r); ok {
+						note += fmt.Sprintf("; bowery resume %s can still use it, done ends that", owner)
+					}
+				}
 				whose = "  (" + note + ")"
 			case machine != "":
 				note = "no record here: maybe another dispatcher's"
@@ -206,19 +208,32 @@ func findOrphans() ([]orphan, error) {
 	}
 	for _, name := range names {
 		r := recs[name]
-		if live[name] || (r.TerminalID != "" && terms[r.TerminalID]) {
+		if live[name] {
 			continue
 		}
 		res, err := resumable(r)
 		if err != nil {
-			return nil, err
+			// One record's check failing is that record's problem, not the box's.
+			warn("%s: can't tell whether it can be resumed: %v", name, herdrMsg(err))
+			res = false
 		}
 		hint := ""
 		if res {
-			hint = "  (bowery resume " + name + ")"
+			hint = "  (bowery resume " + name + "; done ends that)"
 		}
 		rec := orphan{kind: "record", target: name, Name: name, Status: "gone", Repo: r.Repo, Branch: r.Branch,
 			Started: r.Started, Resumable: res, Resumes: r.Resumes}
+		if r.TerminalID != "" && terms[r.TerminalID] {
+			// Its own terminal is still open: the agent quit, or was closed,
+			// back to its shell. Only worth a line when it can come back there.
+			if !res {
+				continue
+			}
+			rec.Note = "agent gone, its pane still open"
+			rec.line = name + ": " + rec.Note + hint
+			out = append(out, rec)
+			continue
+		}
 		if c := ownedContainer(r, ps, all); c != nil {
 			rec.Note = fmt.Sprintf("agent gone, its %s %s still open with %d pane(s)", c.kind, c.id, len(c.panes))
 			rec.line = name + ": " + rec.Note + hint
@@ -289,17 +304,24 @@ func cmdOrphans(argv []string) {
 	type perMachine struct {
 		m     string
 		found []orphan
+		ok    bool
 	}
 	var per []perMachine
 	any := false
 	for _, m := range machinesToScan(explicit) {
-		found, _ := onMachine(m, findOrphans)
-		per = append(per, perMachine{m, found})
+		found, ok := onMachine(m, findOrphans)
+		per = append(per, perMachine{m, found, ok})
 		any = any || len(found) > 0
 	}
 	if asJSON {
 		list := []orphan{}
 		for _, p := range per {
+			if !p.ok {
+				// Say so: an unreachable box must not read as a clean one.
+				list = append(list, orphan{Kind: "unreachable", Target: p.m, Machine: p.m,
+					Note: "could not be read; its orphans are unknown"})
+				continue
+			}
 			for _, o := range p.found {
 				o.Kind, o.Target, o.Machine = o.kind, o.target, p.m
 				list = append(list, o)
@@ -396,7 +418,11 @@ func cmdList(argv []string) {
 					if r.Resumes > 0 {
 						note += fmt.Sprintf("  (resumed %d time(s))", r.Resumes)
 					}
-					say("%-8s %-4s %-8s %-16s %s", "-", r.Sound, "gone", r.Name, note)
+					snd := r.Sound
+					if snd == "" {
+						snd = "-"
+					}
+					say("%-8s %-4s %-8s %-16s %s", "-", snd, "gone", r.Name, note)
 				}
 			}
 			found, err := findOrphans()

@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -17,38 +18,64 @@ const resumeNotice = "You were resumed: check what you already did before redoin
 
 type resumeOpts struct {
 	placement, timeout string
+	gated              string // "", "gated" or "ungated": overrides what the record says
 	dryRun             bool
 	prompt             []string
 }
 
+const resumeUsage = "bowery resume <name> [--swarm|--workspace] [--gated|--ungated] [--machine LABEL] " +
+	"[--timeout MS] [--dry-run] [-- <prompt>]"
+
 func cmdResume(argv []string) {
+	// Everything after a literal -- is the prompt, flags and all.
+	var prompt []string
+	for i, a := range argv {
+		if a == "--" {
+			argv, prompt = argv[:i], argv[i+1:]
+			break
+		}
+	}
 	explicit, argv := popMachine(argv)
-	if len(argv) == 0 || strings.HasPrefix(argv[0], "-") {
-		die("resume: which agent? (bowery resume <name> [--swarm|--workspace] [--dry-run] [-- <prompt>])")
-	}
-	name, argv := argv[0], argv[1:]
-	if !nameRE.MatchString(name) {
-		die("agent name must be lowercase/digits/-/_ (got '%s')", name)
-	}
-	o := resumeOpts{timeout: "60000"}
+	o := resumeOpts{timeout: "60000", prompt: prompt}
+	name := ""
 	for i := 0; i < len(argv); i++ {
 		switch a := argv[i]; a {
 		case "--swarm", "--workspace":
+			if o.placement != "" && o.placement != a[2:] {
+				die("resume: --swarm and --workspace are two different places; pick one")
+			}
 			o.placement = a[2:]
+		case "--gated", "--ungated":
+			if o.gated != "" && o.gated != a[2:] {
+				die("resume: --gated and --ungated contradict each other")
+			}
+			o.gated = a[2:]
 		case "--dry-run":
 			o.dryRun = true
 		case "--timeout":
 			if i+1 >= len(argv) {
 				die("--timeout needs a value")
 			}
+			if n, err := strconv.Atoi(argv[i+1]); err != nil || n <= 0 {
+				die("--timeout takes milliseconds, a whole number above 0 (got '%s')", argv[i+1])
+			}
 			o.timeout = argv[i+1]
 			i++
-		case "--":
-			o.prompt = argv[i+1:]
-			i = len(argv)
 		default:
-			die("resume: unknown option %s", a)
+			if strings.HasPrefix(a, "-") {
+				die("resume: unknown option %s (%s)", a, resumeUsage)
+			}
+			if name != "" {
+				die("resume: one agent at a time (got %s and %s)", name, a)
+			}
+			name = a
 		}
+	}
+	if name == "" {
+		die("resume: which agent? (%s)", resumeUsage)
+	}
+	if !nameRE.MatchString(name) {
+		die("agent name must be lowercase/digits/-/_ (got '%s')", name)
 	}
 	if err := pickMachine(name, explicit); err != nil {
 		die("resume: %v", herdrMsg(err))
@@ -85,9 +112,12 @@ func resumeOne(name string, o resumeOpts) error {
 		return refuse("no dispatch record for %s%s; resume only brings back an agent bowery dispatched", name, where)
 	}
 
-	// ---- checks; nothing is changed until all of them pass
+	// ---- checks; nothing is changed, not even a record file, until all pass
 	if rec.Kind != "" && rec.Kind != "claude" {
 		return refuse("%s is a %s agent; resume knows how to resume claude sessions only", name, rec.Kind)
+	}
+	if err := identityStill(rec); err != nil {
+		return err
 	}
 	ags, err := agents()
 	if err != nil {
@@ -101,9 +131,8 @@ func resumeOne(name string, o resumeOpts) error {
 	if err != nil {
 		return err
 	}
-	refreshSessions(ags)
-	if r := loadRecord(name); r != nil {
-		rec = r
+	if s := freshSession(rec, ags); s != "" {
+		rec.Session = s // in memory only, like everything before the start
 	}
 	for _, a := range ags {
 		if a.Name == name {
@@ -131,13 +160,13 @@ func resumeOne(name string, o resumeOpts) error {
 		return refuse("%s's record doesn't say which directory it ran in (an older record without a worktree); "+
 			"dispatch it again instead", name)
 	}
-	if d, err := isDir(cwd); err != nil {
+	if d, err := isDirAs(cwd); err != nil {
 		return err
 	} else if !d {
 		return refuse("%s ran in %s, which is gone", name, cwd)
 	}
 	for _, w := range recWorktrees(rec) {
-		ex, err := exists(w.Path)
+		ex, err := existsAs(w.Path)
 		if err != nil {
 			return err
 		}
@@ -145,15 +174,31 @@ func resumeOne(name string, o resumeOpts) error {
 			return refuse("%s's worktree %s is gone; its work can't be resumed there", name, w.Path)
 		}
 	}
+	// Records from before 0.3.0 don't say how the agent was started (they
+	// have no cwd of their own). Don't guess its permissions.
+	gated := rec.Gated
+	switch {
+	case o.gated != "":
+		gated = o.gated == "gated"
+	case rec.Cwd == "":
+		return refuse("%s was dispatched by an older bowery, whose record doesn't say whether it was --gated; "+
+			"pass --gated (permission prompts on) or --ungated", name)
+	}
 	l, err := planLanding(rec, o, ags, ps, all)
 	if err != nil {
 		return err
 	}
-	if l.pane != "" {
+	var cur Pane
+	if l.placement == "pane" {
+		// Its own pane, reused: the one place resume lands among processes it
+		// didn't start, so the one to check for another tool's marker.
 		if tag, err := handsOff(l.pane); err != nil {
 			return err
 		} else if tag != "" {
 			return refuse("%s holds a process carrying %s, which belongs to another tool; not starting %s there", l.pane, tag, name)
+		}
+		if cur, err = paneGet(l.pane); err != nil {
+			return err
 		}
 	}
 
@@ -163,7 +208,7 @@ func resumeOne(name string, o resumeOpts) error {
 	}
 
 	agentArgs := []string{"--"}
-	if !rec.Gated {
+	if !gated {
 		agentArgs = append(agentArgs, "--dangerously-skip-permissions")
 	}
 	if rec.Model != "" {
@@ -172,6 +217,10 @@ func resumeOne(name string, o resumeOpts) error {
 	agentArgs = append(agentArgs, "--resume", rec.Session)
 
 	where := l.why
+	cd := l.placement == "pane" && norm(cur.Cwd) != norm(cwd)
+	if cd {
+		where += fmt.Sprintf(" (after cd %s there)", cwd)
+	}
 	if machine != "" {
 		where += " on " + machine
 	}
@@ -179,7 +228,11 @@ func resumeOne(name string, o resumeOpts) error {
 		where += " as " + rec.As
 	}
 	if o.dryRun {
-		say("[dry-run] would resume %s (session %s) in %s, %s", name, rec.Session, cwd, where)
+		perm := "permission prompts off"
+		if gated {
+			perm = "permission prompts on"
+		}
+		say("[dry-run] would resume %s (session %s, %s) in %s, %s, and send it the resume notice", name, rec.Session, perm, cwd, where)
 		return nil
 	}
 
@@ -190,7 +243,7 @@ func resumeOne(name string, o resumeOpts) error {
 	case "pane":
 		so.pane = l.pane
 		// claude files a session under the directory it starts in.
-		if cur, err := paneGet(l.pane); err == nil && norm(cur.Cwd) != norm(cwd) {
+		if cd {
 			if err := herdr(nil, "pane", "run", l.pane, "cd "+shq(cwd)); err != nil {
 				return err
 			}
@@ -204,30 +257,19 @@ func resumeOne(name string, o resumeOpts) error {
 	pane, err := startAgent(name, so, from, cwd, agentArgs, scratch, &also, m)
 	if err != nil {
 		undoStart(m)
+		if cd && cur.Cwd != "" {
+			_ = herdr(nil, "pane", "run", l.pane, "cd "+shq(cur.Cwd)) // put the shell back where it was
+		}
 		return err
 	}
-	sound := rec.Sound
-	if sound == "" {
-		sound = "off"
-	}
-	if err := setSound(pane, sound); err != nil {
-		return err
-	}
-	msg := resumeNotice
-	if at != "" {
-		msg += " " + at
-	}
-	if len(o.prompt) > 0 {
-		msg += "\n\n" + strings.Join(o.prompt, " ")
-	}
-	if err := herdr(nil, "agent", "prompt", name, msg); err != nil {
+	p, err := paneGet(pane)
+	if err != nil {
+		undoStart(m)
 		return err
 	}
 
-	p, err := paneGet(pane)
-	if err != nil {
-		return err
-	}
+	// The agent is up: record it before anything else can fail, so the
+	// record never points at a pane it left.
 	rec.PaneID, rec.TerminalID, rec.WorkspaceID, rec.TabID = p.PaneID, p.TerminalID, p.WorkspaceID, p.TabID
 	switch l.placement {
 	case "swarm":
@@ -238,10 +280,29 @@ func resumeOne(name string, o resumeOpts) error {
 	if s := sessionIn(p.PaneID); s != "" {
 		rec.Session = s
 	}
-	rec.Cwd = cwd
+	rec.Cwd, rec.Gated = cwd, gated
 	rec.Resumed, rec.Resumes = nowISO(), rec.Resumes+1
 	if err := writeRecord(rec); err != nil {
-		return fail("resumed, but could not write the dispatch record: %v", err)
+		return fail("%s is running again in %s, but its dispatch record could not be written: %v", name, p.PaneID, err)
+	}
+
+	sound := rec.Sound
+	if sound == "" {
+		sound = "off"
+	}
+	msg := resumeNotice
+	if at != "" {
+		msg += " " + at
+	}
+	if len(o.prompt) > 0 {
+		msg += "\n\n" + strings.Join(o.prompt, " ")
+	}
+	if err := setSound(pane, sound); err != nil {
+		warn("%s is running again in %s, but tagging its sound failed: %v (bowery mute|unmute %s)", name, p.PaneID, herdrMsg(err), name)
+	}
+	if err := herdr(nil, "agent", "prompt", name, msg); err != nil {
+		return fail("%s is running again in %s, but the resume notice didn't reach it: %v; "+
+			"send it yourself (herdr agent prompt %s \"<notice>\"), or done it", name, p.PaneID, herdrMsg(err), name)
 	}
 	out := []kv{{"name", name}, {"pane_id", p.PaneID}, {"workspace_id", p.WorkspaceID}, {"tab_id", p.TabID},
 		{"sound", sound}, {"session", rec.Session}, {"resumes", fmt.Sprint(rec.Resumes)}}
@@ -253,6 +314,32 @@ func resumeOne(name string, o resumeOpts) error {
 	}
 	fmt.Println(jsonLine(out))
 	return nil
+}
+
+// identityStill refuses when the record's --as and today's config disagree:
+// the identity_command it was dispatched under is gone, or one was added
+// that the record has no one for.
+func identityStill(rec *Record) error {
+	ic, where := cfg.IdentityCommand, cfg.path
+	if machine != "" {
+		ic = machineConfig(machine).IdentityCommand
+	}
+	switch {
+	case rec.As != "" && ic == "":
+		return refuse("%s was dispatched as %s, but there is no identity_command for %s now (%s); "+
+			"it would start as the wrong person", rec.Name, rec.As, serverName(), where)
+	case rec.As == "" && ic != "" && machine != "":
+		return refuse("%s was dispatched with no --as, but %s has identities now (identity_command); "+
+			"dispatch it again as someone", rec.Name, serverName())
+	}
+	return nil
+}
+
+func serverName() string {
+	if machine != "" {
+		return machine
+	}
+	return "this machine"
 }
 
 // planLanding picks where the agent comes back, without changing anything:
@@ -279,6 +366,18 @@ func planLanding(rec *Record, o resumeOpts, ags []Agent, ps []Pane, all []Worksp
 					rec.Name, p.PaneID, paneDesc(p))
 			}
 			return landing{placement: "pane", pane: p.PaneID, why: "its own pane " + p.PaneID}, nil
+		}
+	}
+	if o.placement != "" {
+		if c := ownedContainer(rec, ps, all); c != nil {
+			return landing{}, refuse("%s's %s %s is still open; resume without --%s to come back there, "+
+				"or close it first (a new one would leave it owned by nothing)", rec.Name, c.kind, c.id, o.placement)
+		}
+		for _, p := range ps {
+			if rec.TerminalID != "" && p.TerminalID == rec.TerminalID {
+				return landing{}, refuse("%s's pane %s is still open; resume without --%s to come back there, or close it first",
+					rec.Name, p.PaneID, o.placement)
+			}
 		}
 	}
 	if o.placement == "" {
@@ -313,11 +412,11 @@ func resumable(r *Record) (bool, error) {
 	if cwd == "" {
 		return false, nil
 	}
-	if d, err := isDir(cwd); err != nil || !d {
+	if d, err := isDirAs(cwd); err != nil || !d {
 		return false, err
 	}
 	for _, w := range recWorktrees(r) {
-		if ex, err := exists(w.Path); err != nil || !ex {
+		if ex, err := existsAs(w.Path); err != nil || !ex {
 			return false, err
 		}
 	}
@@ -369,7 +468,9 @@ func handsOff(pane string) (string, error) {
 func procEnv(pid int) (string, error) {
 	script := fmt.Sprintf(`if [ -r /proc/%[1]d/environ ]; then tr '\0' '\n' < /proc/%[1]d/environ; else ps -wwE -o command= -p %[1]d 2>/dev/null; fi; true`, pid)
 	if machine != "" {
-		rc, out, err := sshSh(script)
+		// As the identity: after `become` the pane's processes are theirs,
+		// and only they (or root) can read their environment.
+		rc, out, err := sshSh(identityPrefix() + "sh -c " + shq(script))
 		if err != nil {
 			return "", err
 		}
@@ -381,7 +482,11 @@ func procEnv(pid int) (string, error) {
 	if b, err := os.ReadFile(fmt.Sprintf("/proc/%d/environ", pid)); err == nil {
 		return string(b), nil
 	}
-	out, _ := exec.Command("sh", "-c", script).Output()
+	cmd := exec.Command("sh", "-c", script)
+	if as != "" && cfg.IdentityCommand != "" {
+		cmd = exec.Command(expandUser(cfg.IdentityCommand), as, "sh", "-c", script)
+	}
+	out, _ := cmd.Output()
 	return string(out), nil
 }
 
@@ -390,8 +495,16 @@ func procEnv(pid int) (string, error) {
 // "" when its directory isn't in a git checkout.
 func checkoutAt(dir string) (string, error) {
 	sha, ok, err := gitOut(dir, "rev-parse", "--short", "HEAD")
-	if err != nil || !ok {
+	if err != nil {
 		return "", err
+	}
+	if !ok {
+		if strings.Contains(sha, "not a git repository") {
+			return "", nil
+		}
+		// git ran and failed for another reason (an identity wrapper that
+		// refused, dubious ownership): say so rather than resume blind.
+		return "", fail("can't read the checkout at %s: %s", dir, sha)
 	}
 	branch, ok, err := gitOut(dir, "symbolic-ref", "-q", "--short", "HEAD")
 	if err != nil {

@@ -126,37 +126,62 @@ found: by `terminal_id`, which survives both where `pane_id` does not.
 directory), with the flags it had (`--gated`, `--model`), on its machine, as
 its `--as`. The first prompt says it was resumed and to check what it already
 did before redoing anything, since an agent may have placed paid or
-irreversible work before it died; a prompt after `--` follows it.
+irreversible work before it died; a prompt after `--` follows it. That is a
+prompt, not a check: bowery can't know what an agent's work cost, so the
+agent itself is asked to look.
 
 The session id comes from herdr (`agent_session` in `herdr agent list`). It is
-recorded at dispatch and refreshed whenever a command sees the live agent in
-its own terminal (`list`, `orphans`, `watch`, `resume`): a `/clear` gives
-claude a new one. A namesake in another terminal is not the agent, and never
-overwrites it.
+recorded at dispatch and refreshed whenever `list` or `watch` sees the live
+agent in its own terminal: a `/clear` gives claude a new one. `orphans` and a
+`resume` that hasn't started anything read the fresh id but write nothing. A
+namesake in another terminal is not the agent and never overwrites it; an
+older record without a terminal id is matched by pane, and with neither
+nothing is taken. Each refresh re-reads the record just before writing and
+gives way if it changed or went (a `done` in between wins).
 
-Like `done`, it checks everything before it changes anything. It refuses:
+Like `done`, it checks everything before it changes anything, records
+included. It refuses:
 
 - while the agent is alive, or any live agent carries its session (one
   conversation must not run twice);
 - when the record has no session (written by an older bowery, never seen
   alive since) or no directory, or the agent is not claude;
-- when its directory or any recorded worktree is gone;
+- when its directory or any recorded worktree is gone (checked as its `--as`
+  identity, whose directories may be closed to the ssh login);
+- when its `--as` and the config disagree: dispatched as someone, but there is
+  no `identity_command` now (it would start as the wrong person), or a box
+  that has identities now and a record with none;
+- for a record written before 0.3.0 (no `cwd` of its own), which doesn't say
+  whether the agent was `--gated`: `--gated` or `--ungated` says, and is
+  recorded;
+- with `--swarm` or `--workspace` while its old pane, tab or workspace is
+  still open, since a new one would leave the old owned by nothing;
 - when the pane it would use is someone else's: the recorded terminal now
   holding another agent, or running anything rather than sitting at a shell
   prompt;
 - when that pane's shell or foreground processes carry a variable named in
   `hands_off_env`: another tool's processes, read from `/proc` (or `ps -E`)
-  where the pane runs.
+  where the pane runs, as its identity. That is the environment each process
+  started with: a variable a shell exported later isn't seen. Only a reused
+  pane is checked; a new pane is bowery's own fresh shell.
 
 Where it lands: the agent's own terminal if it is still open at a shell (the
 agent quit), moved back to its directory if need be; else a new pane in the
 tab or workspace bowery made for it, if that is still open (checked by label,
 as `done` does); else a new place of the kind it had: a swarm tab, or a
 workspace for a `--workspace` agent. A `--split` or `--pane` agent never owned
-the panes around it, so it comes back in a swarm tab rather than beside a
-neighbour. `--swarm` and `--workspace` override. The record's pane, tab,
-workspace and `owns` are rewritten, so `done` brings it home as usual, and
+the panes around it, so once its own pane is gone it comes back in a swarm
+tab rather than beside a neighbour. `--swarm` and `--workspace` override
+(refused while the old place is open, above). The record's pane, terminal,
+tab and workspace ids are rewritten every time, and for a new swarm tab or
+workspace its `placement` and `owns` too, so `done` brings it home as usual;
 `resumed` and `resumes` say when and how often.
+
+The record is written as soon as the agent is up, before its sound tag and
+the notice, so a failure after that leaves a record that points at the
+running agent (and says so) rather than at the pane it left. A start that
+fails takes back what it made, and a reused pane's shell is moved back to
+where it was.
 
 Only a record makes an agent resumable: an agent bowery didn't dispatch (a
 pane another tool started) has none, and is out of reach.
@@ -194,15 +219,23 @@ directory and are read as they are.
 
 ## Orphans
 
-`orphans` lists what `done` would clean up, read-only: dispatched agents that
+`orphans` lists what `done` would clean up, read-only (it writes no file):
+dispatched agents that
 are finished but alive; checkouts under the worktrees dir that no pane is in
 and no live agent's record claims (with their state: dirty, merged,
 unmerged); blank repo-root workspaces; and records whose agent is gone (with
-its tab or workspace still open, its worktree still there, or nothing left at
-all), each marked `(bowery resume <name>)` when resume can bring it back.
+its pane, tab or workspace still open, its worktree still there, or nothing
+left at all), each marked `(bowery resume <name>; done ends that)` when resume
+can bring it back. A dead agent whose own pane is still open at a shell is
+listed only then. A resumable agent's worktree line says so too, since `done
+<path>` ends the resume as surely as `done <name>`. One record whose check
+fails (an ssh hiccup) is warned about and taken as not resumable; it doesn't
+lose the rest of the box.
 `--json` prints the same as a list of objects (`kind`, `target`, `name`,
 `machine`, `status`, `repo`, `branch`, `merged`, `state`, `note`,
-`resumable`, `resumes`, ...) for a program; the text format stays as it is. Locally, an
+`resumable`, `resumes`, ...) for a program, with an entry of kind
+`unreachable` for a machine that couldn't be read, so a program never takes
+it for a clean one. Locally, an
 agent tagged `sound=off` counts as dispatched; on a machine only a record made
 here does, because a shared box runs other people's dispatches too.
 

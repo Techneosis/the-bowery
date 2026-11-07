@@ -214,6 +214,43 @@ func rTest(flag, path string) (bool, error) {
 	return rc == 0, err
 }
 
+// testAs is `test <flag> <path>` run as the agent's identity when there is
+// one (its directories may be closed to anyone else), else as the login.
+// Only a clear yes or no is an answer: a wrapper that fails is an error.
+func testAs(flag, path string) (bool, error) {
+	script := "if test " + flag + " " + shq(path) + "; then echo yes; else echo no; fi"
+	var out string
+	switch {
+	case machine != "" && identityPrefix() != "":
+		_, o, err := sshSh(identityPrefix() + "sh -c " + shq(script))
+		if err != nil {
+			return false, err
+		}
+		out = o
+	case machine == "" && as != "" && cfg.IdentityCommand != "":
+		b, err := exec.Command(expandUser(cfg.IdentityCommand), as, "sh", "-c", script).Output()
+		if err != nil {
+			return false, fail("checking %s as %s: %v", path, as, err)
+		}
+		out = string(b)
+	default:
+		if flag == "-d" {
+			return isDir(path)
+		}
+		return exists(path)
+	}
+	switch strings.TrimSpace(out) {
+	case "yes":
+		return true, nil
+	case "no":
+		return false, nil
+	}
+	return false, fail("checking %s as %s gave no answer: %s", path, as, strings.TrimSpace(out))
+}
+
+func isDirAs(path string) (bool, error)  { return testAs("-d", path) }
+func existsAs(path string) (bool, error) { return testAs("-e", path) }
+
 func isDir(path string) (bool, error) {
 	if machine != "" {
 		return rTest("-d", path)

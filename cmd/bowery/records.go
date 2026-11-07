@@ -124,11 +124,26 @@ func writeRecord(r *Record) error {
 		r.Worktrees = []RecWorktree{}
 	}
 	b, _ := json.MarshalIndent(r, "", "  ")
-	tmp := recordPath(r.Name) + ".tmp"
-	if err := os.WriteFile(tmp, append(b, '\n'), 0o644); err != nil {
+	path := recordPath(r.Name)
+	// A temp name of its own, so two writers never share one.
+	f, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*.tmp")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, recordPath(r.Name))
+	tmp := f.Name()
+	_, werr := f.Write(append(b, '\n'))
+	cerr := f.Close()
+	if werr == nil {
+		werr = cerr
+	}
+	if werr == nil {
+		werr = os.Chmod(tmp, 0o644)
+	}
+	if werr != nil {
+		_ = os.Remove(tmp)
+		return werr
+	}
+	return os.Rename(tmp, path)
 }
 
 func dropRecord(name string) {
@@ -333,26 +348,61 @@ func pickMachine(target, explicit string) error {
 	return nil
 }
 
-// refreshSessions keeps each record's session id what herdr says its live
-// agent has now (a /clear starts a new one). Only the agent in the record's
-// own terminal counts: a namesake elsewhere is not this agent.
-func refreshSessions(ags []Agent) {
-	byName := map[string]Agent{}
+// freshSession is the session id herdr reports now for r's live agent, or ""
+// when there is none to take. Only the agent in the record's own terminal
+// counts: a namesake elsewhere is not this agent. An older record without a
+// terminal id is matched by pane instead; with neither to compare, nothing
+// is taken.
+func freshSession(r *Record, ags []Agent) string {
 	for _, a := range ags {
-		if a.Name != "" {
-			byName[a.Name] = a
+		if a.Name != r.Name || a.SessionID() == "" {
+			continue
+		}
+		switch {
+		case r.TerminalID != "" && a.TerminalID != "":
+			if a.TerminalID != r.TerminalID {
+				continue
+			}
+		case r.PaneID != "" && a.PaneID != "":
+			if a.PaneID != r.PaneID {
+				continue
+			}
+		default:
+			continue
+		}
+		return a.SessionID()
+	}
+	return ""
+}
+
+// withFreshSessions is every record on this server, each with the session
+// its live agent has now (a /clear starts a new one). It changes no file.
+func withFreshSessions(ags []Agent) []*Record {
+	recs := allRecords()
+	for _, r := range recs {
+		if s := freshSession(r, ags); s != "" {
+			r.Session = s
 		}
 	}
+	return recs
+}
+
+// refreshSessions writes those fresh session ids into the records, so a
+// session is known after its agent dies. Each write re-reads the record
+// first and gives way if it was dropped or changed meanwhile (a `done` or a
+// `resume` in between wins), and a failed write only warns.
+func refreshSessions(ags []Agent) {
 	for _, r := range allRecords() {
-		a, ok := byName[r.Name]
-		if !ok || a.SessionID() == "" || a.SessionID() == r.Session {
+		s := freshSession(r, ags)
+		if s == "" || s == r.Session {
 			continue
 		}
-		if r.TerminalID != "" && a.TerminalID != "" && a.TerminalID != r.TerminalID {
+		cur := readRecord(recordPath(r.Name))
+		if cur == nil || cur.Session != r.Session || cur.TerminalID != r.TerminalID {
 			continue
 		}
-		r.Session = a.SessionID()
-		if err := writeRecord(r); err != nil {
+		cur.Session = s
+		if err := writeRecord(cur); err != nil {
 			warn("could not update %s's record: %v", r.Name, err)
 		}
 	}

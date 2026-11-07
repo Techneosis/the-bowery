@@ -46,7 +46,7 @@ _bowery() {
                 COMPREPLY=($(compgen -d -- "$cur"))
             fi ;;
         resume)
-            [[ $cur == -* ]] && COMPREPLY=($(compgen -W "--swarm --workspace --dry-run --timeout --machine --" -- "$cur")) \
+            [[ $cur == -* ]] && COMPREPLY=($(compgen -W "--swarm --workspace --gated --ungated --dry-run --timeout --machine --" -- "$cur")) \
                 || COMPREPLY=($(compgen -W "$(bowery names 2>/dev/null)" -- "$cur")) ;;
         mute|unmute)
             [[ $cur == -* ]] && COMPREPLY=($(compgen -W "--machine" -- "$cur")) \

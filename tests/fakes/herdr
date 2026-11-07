@@ -347,6 +347,8 @@ def run(s, argv):
         if verb == "wait":
             out(cid, {"type": "agent_status", "agent": agent_view(s, a)})
         if verb == "prompt":
+            if os.environ.get("FAKE_PROMPT_FAIL") == "1":
+                err(cid, "timeout", "timed out waiting for the agent to take the prompt")
             if a["agent_status"] == "blocked":
                 err(cid, "agent_blocked", f"agent {name} is blocked")
             a["prompts"].append({"text": args[1], "wait": "--wait" in args})

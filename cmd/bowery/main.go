@@ -12,7 +12,7 @@ const usage = `bowery: send agents out into herdr, and bring them home with done
 
   bowery dispatch <name> [placement] [options] [-- <prompt>]
   bowery done <name|pane|worktree-path>... [--force] [--keep-worktree] [--keep-branch] [--dry-run]
-  bowery resume <name> [--swarm|--workspace] [--dry-run] [-- <prompt>]
+  bowery resume <name> [--swarm|--workspace] [--gated|--ungated] [--machine L] [--timeout MS] [--dry-run] [-- <prompt>]
   bowery watch <config> [--poll 30s] [--max 45m]   (bowery watch --help)
 
 dispatch: make (or take) a pane, start the agent, tag it quiet, optionally
@@ -87,15 +87,23 @@ other commands
                            machine, as its --as: in its own pane if that is
                            at a shell, else a new pane in its tab, else a new
                            tab in swarm (--workspace for a workspace). Its
-                           first message says it was resumed. Refuses while
-                           it is alive, without a session in its record,
-                           when its worktree is gone, or when the pane it
-                           would use is someone else's. --dry-run says where.
+                           first message says it was resumed. Refuses,
+                           changing nothing, while it or its session is
+                           alive; without a session or directory in its
+                           record; for a kind other than claude; when its
+                           directory or a worktree is gone; when the pane it
+                           would use is someone else's or carries a
+                           hands_off_env marker; when its --as no longer
+                           matches the config; with --swarm/--workspace
+                           while its old tab is open; and for a pre-0.3.0
+                           record without --gated or --ungated. --dry-run
+                           says where.
   adopt <name> <path>...   record more worktrees as <name>'s
   orphans [--machine L] [--json]
                            what done would clean up (and which dead agents
                            resume can bring back), on every server with a
-                           record here. Read-only.
+                           record here. Read-only. An unreachable machine is
+                           a warning, and an "unreachable" entry in --json.
   list [--machine L]       agents, who is muted, dead agents that can be
                            resumed, and an orphan count
   mute|unmute <target>...  set or clear an agent's sound=off tag

@@ -161,7 +161,7 @@ or it was closed by mistake, its work is half done and its conversation is
 the only record of how far it got. Bring it back instead of starting over:
 
 ```bash
-bowery resume <name> [--dry-run] [-- <what to do next>]
+bowery resume <name> [--dry-run] [--gated|--ungated] [-- <what to do next>]
 ```
 
 It starts the agent again in the same worktree, machine and `--as` identity,
@@ -179,11 +179,23 @@ Then wait on it and `done` it as usual.
   deploy, a sent message) must check that work's status after a resume, not
   place it again. Say so in the follow-up if it matters.
 
-It refuses, changing nothing, while the agent is alive, when its record has
-no session (an older dispatch never seen alive since), when its worktree is
-gone, or when the pane it would use now holds someone else's agent or a
-running process. `bowery list` and `bowery orphans` say which dead agents can
-be resumed (`(bowery resume <name>)`).
+It refuses, changing nothing, while the agent or its session is alive; when
+its record has no session or directory (an older dispatch never seen alive
+since); for a non-claude agent; when its directory or a worktree is gone; when
+the pane it would use holds someone else's agent, a running process or another
+tool's marker (`hands_off_env`); when its `--as` no longer matches the config;
+and with `--swarm`/`--workspace` while its old tab is still open. A record
+from before 0.3.0 doesn't say whether the agent was gated: pass `--gated` or
+`--ungated`. `bowery orphans` marks dead agents that can be resumed with
+`(bowery resume <name>; done ends that)`, and `bowery list` shows them as
+`gone ... bowery resume <name>`.
+
+**`done` ends a resume.** `done <name>` drops the record and its session, and
+`done <path>` on its worktree removes the worktree resume needs. Resume first
+if the work isn't finished.
+
+If a resume fails after the agent started ("is running again in ..."), the
+record already points at it: send the notice yourself, or `done` it.
 
 ## Remote dispatch (`--machine`, `--as`)
 

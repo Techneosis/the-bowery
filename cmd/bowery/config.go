@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -74,6 +75,8 @@ func configPath() string {
 	return filepath.Join(base, "bowery", "config.toml")
 }
 
+var envNameRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
 func loadConfig() *Config {
 	c := &Config{path: configPath()}
 	md, err := toml.DecodeFile(c.path, c)
@@ -90,6 +93,11 @@ func loadConfig() *Config {
 	case os.IsNotExist(err):
 	default:
 		die("%s: %v", c.path, err)
+	}
+	for _, v := range c.HandsOffEnv {
+		if !envNameRE.MatchString(v) {
+			die("%s: hands_off_env: %q is not an environment variable name", c.path, v)
+		}
 	}
 	if c.Swarm == "" {
 		c.Swarm = "swarm"

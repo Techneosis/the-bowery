@@ -91,7 +91,9 @@ did before doing it again. The book counts each return.
 **Strays** (`bowery orphans`). Agents finished but still about, worktrees no
 pane is in and no one's record claims, blank workspaces herdr left behind,
 records whose agent is gone, and which of those `resume` can bring back.
-Read-only: it tells you what `done` would clean. `--json` for a program.
+Read-only: it tells you what `done` would clean, and that `done` ends any
+chance of a return. `--json` for a program, which says when a box couldn't
+be reached rather than calling it clean.
 
 ---
 
@@ -122,8 +124,11 @@ never makes groups, and refuses any close that would cascade into one.
 courier's own pane only if it is the same terminal, at a bare shell prompt;
 a pane now holding another agent, or running anything, is refused. It never
 starts a courier in a pane carrying another tool's marker (`hands_off_env` in
-the config), and it refuses while the courier is still about, or when their
-route is gone.
+the config). It refuses, changing nothing, while the courier or their
+conversation is still about, when their worktree or folder is gone, when the
+papers no longer say who they travel as, or when the room they'd come back to
+is someone else's. A courier whose old room is still open comes back there,
+not to a second one.
 
 **7. Folders are trusted on your say-so only.** Claude asks before working in
 a folder it hasn't seen. The Bowery answers yes under your trust roots (`~/dev`
@@ -181,7 +186,7 @@ bowery dispatch <name> [placement] [options] [-- <prompt>]
     --wait                   block until the agent settles after its prompt
 
 bowery done <name|pane|path>...   bring them home  [--force] [--keep-worktree] [--keep-branch] [--dry-run] [--machine L]
-bowery resume <name> [--swarm|--workspace] [--dry-run] [-- <prompt>]   bring a dead one back
+bowery resume <name> [--swarm|--workspace] [--gated|--ungated] [--dry-run] [-- <prompt>]   bring a dead one back
 bowery adopt <name> <path>...     record more worktrees as the agent's
 bowery orphans [--machine L] [--json]   what done would clean up
 bowery list [--machine L]         agents, quiet or loud, who can be resumed, and how many strays
