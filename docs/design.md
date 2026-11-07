@@ -238,6 +238,13 @@ refused while the old session is live somewhere), and the record takes the
 new session, once herdr confirms it, so the next plain resume continues the
 fresh one. It counts as a resume, so `--not-within` still guards it.
 
+`--json` makes `resume` print exactly one JSON line on stdout, whatever
+happens, with an `outcome`: `resumed` or `started_fresh` (with the pane, tab
+and session, as before), `alive`, `busy` (another resume or dispatch holds
+the name), `too_soon`, `dry_run`, `refused` or `failed` (with `why`). Under
+`--if-dead` the first five exit 0 and the last two don't, so a caller can
+tell "it's up" from "too soon" without reading prose.
+
 Only a record makes an agent resumable: an agent bowery didn't dispatch (a
 pane another tool started) has none, and is out of reach.
 

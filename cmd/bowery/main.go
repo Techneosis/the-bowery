@@ -13,7 +13,7 @@ const usage = `bowery: send agents out into herdr, and bring them home with done
   bowery dispatch <name> [placement] [options] [-- <prompt>]
   bowery done <name|pane|worktree-path>... [--force] [--keep-worktree] [--keep-branch] [--dry-run]
   bowery resume <name> [--swarm|--workspace] [--gated|--ungated] [--launcher CMD|--no-launcher]
-                [--fresh] [--if-dead] [--not-within DUR] [--machine L] [--timeout MS] [--dry-run] [-- <prompt>]
+                [--fresh] [--if-dead] [--not-within DUR] [--json] [--machine L] [--timeout MS] [--dry-run] [-- <prompt>]
   bowery watch <config> [--poll 30s] [--max 45m]   (bowery watch --help)
 
 dispatch: make (or take) a pane, start the agent, tag it quiet, optionally
@@ -111,7 +111,10 @@ other commands
                            that recently. One resume of a name runs at a time.
                            --fresh starts it in a new conversation instead,
                            in the same place and the same way (no session
-                           needed; the record takes the new one).
+                           needed; the record takes the new one). --json
+                           prints one line whatever happens, with an
+                           "outcome": resumed, started_fresh, alive, busy,
+                           too_soon, dry_run, refused or failed.
   adopt <name> <path>...   record more worktrees as <name>'s
   orphans [--machine L] [--json]
                            what done would clean up (and which dead agents

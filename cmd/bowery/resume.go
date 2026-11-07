@@ -32,13 +32,14 @@ type resumeOpts struct {
 	noLauncher         bool   // start with herdr agent start, dropping the record's launcher
 	dryRun             bool
 	ifDead             bool          // a no-op (exit 0) when the agent is alive or being resumed
+	asJSON             bool          // one JSON line on stdout, whatever happens, with its outcome
 	fresh              bool          // start it on a new conversation instead of resuming its session
 	notWithin          time.Duration // refuse if it was resumed this recently
 	prompt             []string
 }
 
 const resumeUsage = "bowery resume <name> [--swarm|--workspace] [--gated|--ungated] [--launcher CMD|--no-launcher] " +
-	"[--fresh] [--if-dead] [--not-within DUR] [--machine LABEL] [--timeout MS] [--dry-run] [-- <prompt>]"
+	"[--fresh] [--if-dead] [--not-within DUR] [--json] [--machine LABEL] [--timeout MS] [--dry-run] [-- <prompt>]"
 
 func cmdResume(argv []string) {
 	// Everything after a literal -- is the prompt, flags and all.
@@ -76,6 +77,8 @@ func cmdResume(argv []string) {
 			o.ifDead = true
 		case "--fresh":
 			o.fresh = true
+		case "--json":
+			o.asJSON = true
 		case "--not-within":
 			if i+1 >= len(argv) {
 				die("--not-within needs a duration (10m, 1h)")
@@ -124,13 +127,24 @@ func cmdResume(argv []string) {
 	err := resumeOne(name, o)
 	var rf *Refused
 	var sk *skipped
+	// --json: a caller reads what happened instead of parsing prose.
+	report := func(outcome, why string) {
+		if o.asJSON {
+			fmt.Println(jsonLine([]kv{{"name", name}, {"outcome", outcome}, {"why", why}}))
+		}
+	}
 	switch {
 	case err == nil:
 	case errors.As(err, &sk):
-		say("%s: %v; nothing to do", name, sk.why)
+		report(sk.outcome, sk.why)
+		if !o.asJSON {
+			say("%s: %v; nothing to do", name, sk.why)
+		}
 	case errors.As(err, &rf):
+		report("refused", err.Error())
 		die("resume %s: refused, nothing changed: %v", name, err)
 	default:
+		report("failed", herdrMsg(err))
 		where := ""
 		if machine != "" {
 			where = " (on " + machine + ")"
@@ -163,7 +177,7 @@ func resumeOne(name string, o resumeOpts) error {
 	}
 	if held {
 		if o.ifDead {
-			return &skipped{"another resume or dispatch of it is running"}
+			return &skipped{"busy", "another resume or dispatch of it is running"}
 		}
 		return refuse("another resume or dispatch of %s is running", name)
 	}
@@ -199,7 +213,7 @@ func resumeOne(name string, o resumeOpts) error {
 	for _, a := range ags {
 		if a.Name == name {
 			if o.ifDead {
-				return &skipped{fmt.Sprintf("it's alive (%s, in %s)", a.AgentStatus, a.PaneID)}
+				return &skipped{"alive", fmt.Sprintf("it's alive (%s, in %s)", a.AgentStatus, a.PaneID)}
 			}
 			return refuse("%s is still alive (%s, in %s); nothing to resume", name, a.AgentStatus, a.PaneID)
 		}
@@ -286,7 +300,7 @@ func resumeOne(name string, o resumeOpts) error {
 		if ago < o.notWithin {
 			why := fmt.Sprintf("it was resumed %s, within --not-within %s", when, o.notWithin)
 			if o.ifDead {
-				return &skipped{why}
+				return &skipped{"too_soon", why}
 			}
 			return refuse("%s", why)
 		}
@@ -334,6 +348,10 @@ func resumeOne(name string, o resumeOpts) error {
 		via := ""
 		if launcher != "" {
 			via = ", through " + launcher
+		}
+		if o.asJSON {
+			fmt.Println(jsonLine([]kv{{"name", name}, {"outcome", "dry_run"}, {"fresh", fmt.Sprint(o.fresh)}, {"where", where}}))
+			return nil
 		}
 		if o.fresh {
 			say("[dry-run] would start %s again in a new conversation (%s%s) in %s, %s, and send it the fresh-start notice", name, perm, via, cwd, where)
@@ -426,7 +444,11 @@ func resumeOne(name string, o resumeOpts) error {
 		return fail("%s is running again in %s, but the resume notice didn't reach it: %v; "+
 			"send it yourself (herdr agent prompt %s \"<notice>\"), or done it", name, p.PaneID, herdrMsg(err), name)
 	}
-	out := []kv{{"name", name}, {"pane_id", p.PaneID}, {"workspace_id", p.WorkspaceID}, {"tab_id", p.TabID},
+	started := "resumed"
+	if o.fresh {
+		started = "started_fresh"
+	}
+	out := []kv{{"name", name}, {"outcome", started}, {"pane_id", p.PaneID}, {"workspace_id", p.WorkspaceID}, {"tab_id", p.TabID},
 		{"sound", sound}, {"session", rec.Session}, {"resumes", fmt.Sprint(rec.Resumes)}}
 	if machine != "" {
 		out = append(out, kv{"machine", machine})
@@ -474,7 +496,7 @@ func undoReusedPane(rec *Record, pane string, cd bool, was string) {
 }
 
 // skipped is --if-dead's "nothing to do": not an error, not a refusal.
-type skipped struct{ why string }
+type skipped struct{ outcome, why string } // outcome: alive, busy or too_soon
 
 func (s *skipped) Error() string { return s.why }
 

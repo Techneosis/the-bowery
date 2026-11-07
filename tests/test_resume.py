@@ -686,6 +686,28 @@ class Resume(Bed):
         self.kill("fseat")
         self.assertIn("nothing to do", self.ok("resume", "fseat", "--fresh", "--if-dead", "--not-within", "10m"))
 
+    def test_json_says_what_happened(self):
+        self.dispatch("js", "--cwd", self.repo)
+        def outcome(*args, ok=True):
+            rc, out = self.bowery("resume", "js", "--json", *args)
+            self.assertEqual(rc == 0, ok, out)
+            line = next(l for l in out.splitlines() if l.startswith("{"))
+            return json.loads(line)
+        self.assertEqual(outcome("--if-dead")["outcome"], "alive")
+        self.kill("js")
+        self.assertEqual(outcome("--dry-run")["outcome"], "dry_run")
+        got = outcome("--if-dead")
+        self.assertEqual((got["outcome"], got["name"]), ("resumed", "js"))
+        self.assertTrue(got["pane_id"])
+        self.kill("js")
+        self.assertEqual(outcome("--if-dead", "--not-within", "1h")["outcome"], "too_soon")
+        self.assertEqual(outcome("--fresh")["outcome"], "started_fresh")
+        self.kill("js")
+        with self.lock("js"):
+            self.assertEqual(outcome("--if-dead")["outcome"], "busy")
+        refused = outcome("--swarm", "--not-within", "1h", ok=False)
+        self.assertEqual(refused["outcome"], "refused")
+
     # ------------------------------------------------------------ orphans and list
 
     def test_orphans_shows_an_agent_that_quit_to_its_shell(self):
