@@ -64,7 +64,9 @@ ids of its own to go stale.
 `--launcher <CMD>` starts claude through a command of the user's: a wrapper
 that sets up the agent's environment and then execs claude. `herdr agent
 start` only runs an agent kind's own executable, so with a launcher bowery
-runs `<CMD> <claude's arguments>` in the pane's shell itself, waits for herdr
+runs `BOWERY_LAUNCH=1 <CMD> <claude's arguments>` in the pane's shell
+itself (the variable tells a launcher that bowery sends the first prompt,
+so one with an opening prompt of its own can leave it out), waits for herdr
 to see a claude agent in that pane, names it with `herdr agent rename`,
 answers the folder-trust dialog as a plain start does, and carries on (tag,
 record, prompt). A launcher that doesn't exec claude fails the start, with the

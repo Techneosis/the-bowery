@@ -77,7 +77,9 @@ own default. Only valid with `--kind claude` (the default).
 `--launcher '<command>'` starts claude through a wrapper of the user's, when
 the agent must be started with an environment of its own (a seat launcher,
 say). The command runs in the pane's shell with claude's arguments after it,
-and must `exec claude "$@"`. It's recorded, so `bowery resume` uses it again;
+and must `exec claude "$@"`. bowery sets `BOWERY_LAUNCH=1` for it, and
+sends the first prompt itself, so a launcher with an opening prompt of its
+own should skip it then. It's recorded, so `bowery resume` uses it again;
 `bowery resume <name> --launcher '<command>'` adds one to an agent that had
 none.
 

@@ -429,6 +429,7 @@ class Resume(Bed):
         a = self.agent("seated")
         self.assertEqual(a["pane_id"], out["pane_id"], "named, in the pane bowery made")
         self.assertEqual(a["env"].get("SEAT_BOX"), "box-seated", "started through the launcher")
+        self.assertEqual(a["env"].get("BOWERY_LAUNCH"), "1", "told the Bowery is starting it")
         self.assertEqual(a["args"], ["--dangerously-skip-permissions"])
         self.assertEqual([p["text"] for p in a["prompts"]], ["hello"])
         rec = self.record("seated")

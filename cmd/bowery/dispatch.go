@@ -582,7 +582,11 @@ func launchAgent(name, pane, launcher string, agentArgs []string, timeoutMS int,
 		}
 		time.Sleep(300 * time.Millisecond)
 	}
-	line := launcher
+	// BOWERY_LAUNCH=1 tells the launcher the Bowery is starting it (and will
+	// send the first prompt itself), so a launcher that has an opening
+	// prompt of its own can leave it out. It applies to the line's first
+	// command.
+	line := "BOWERY_LAUNCH=1 " + launcher
 	if len(args) > 0 {
 		line += " " + shJoin(args...)
 	}
