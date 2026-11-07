@@ -176,12 +176,20 @@ func cmdDispatch(argv []string) {
 	}
 
 	// Not while a resume or done of the same name is under way.
+	// Its lock file is the one file dispatch makes before it knows the start
+	// works; the record follows.
 	unlockName, held, err := nameLock(name)
 	if err != nil {
 		die("%v", err)
 	}
 	if held {
 		die("dispatch %s: refused, nothing changed: a resume, dispatch or done of %s is running", name, name)
+	}
+	if loadRecord(name) != nil {
+		// Replacing it would forget the agent's session and its resumes
+		// (and with them --not-within's guard).
+		die("dispatch %s: refused, nothing changed: %s already has a dispatch record; bowery resume %s, or bowery done %s first",
+			name, name, name, name)
 	}
 	defer unlockName() // and keeps the lock's file referenced until dispatch ends
 
@@ -252,19 +260,6 @@ func cmdDispatch(argv []string) {
 		die("%v", err)
 	}
 
-	if err := setSound(pane, o.sound); err != nil {
-		die("%v", herdrMsg(err))
-	}
-	if len(o.prompt) > 0 {
-		args := []string{"agent", "prompt", name, strings.Join(o.prompt, " ")}
-		if o.wait {
-			args = append(args, "--wait")
-		}
-		if err := herdr(nil, args...); err != nil {
-			die("%v", herdrMsg(err))
-		}
-	}
-
 	p, err := paneGet(pane)
 	if err != nil {
 		die("%v", herdrMsg(err))
@@ -284,6 +279,22 @@ func cmdDispatch(argv []string) {
 	if err := writeRecord(rec); err != nil {
 		die("could not write the dispatch record: %v", err)
 	}
+	// Recorded: the agent is done's and resume's to act on from here, so
+	// let go of the name before the prompt (which --wait can hold for long).
+	unlockName()
+	if err := setSound(pane, o.sound); err != nil {
+		die("%v", herdrMsg(err))
+	}
+	if len(o.prompt) > 0 {
+		args := []string{"agent", "prompt", name, strings.Join(o.prompt, " ")}
+		if o.wait {
+			args = append(args, "--wait")
+		}
+		if err := herdr(nil, args...); err != nil {
+			die("%v", herdrMsg(err))
+		}
+	}
+
 	out := []kv{{"name", name}, {"pane_id", p.PaneID}, {"workspace_id", p.WorkspaceID}, {"tab_id", p.TabID}, {"sound", o.sound}}
 	if rec.Worktree != "" {
 		out = append(out, kv{"worktree", rec.Worktree}, kv{"branch", rec.Branch})

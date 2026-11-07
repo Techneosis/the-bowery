@@ -615,14 +615,15 @@ func cmdDone(argv []string) {
 		if err == nil && strings.Contains(t, "/") {
 			t, err = hostPath(t)
 		}
-		if err == nil && nameRE.MatchString(t) {
-			// Not while a resume or dispatch of the same name is under way.
-			unlock, held, lerr := nameLock(t)
+		if who := recordNameFor(t); err == nil && who != "" {
+			// Not while a resume or dispatch of the same agent is under way,
+			// whichever way it's named here (its name, pane or worktree).
+			unlock, held, lerr := nameLock(who)
 			switch {
 			case lerr != nil:
 				err = lerr
 			case held:
-				err = refuse("a resume, dispatch or done of %s is running", t)
+				err = refuse("a resume, dispatch or done of %s is running", who)
 			default:
 				err = doneOne(t, o)
 				unlock()
@@ -646,6 +647,29 @@ func cmdDone(argv []string) {
 		}
 	}
 	os.Exit(rc)
+}
+
+// recordNameFor is the name of the dispatch record a done target means: the
+// name itself, or the record whose pane or worktree it is; "" when no record
+// does (then there's nothing to lock).
+func recordNameFor(t string) string {
+	if nameRE.MatchString(t) {
+		if loadRecord(t) != nil {
+			return t
+		}
+		return ""
+	}
+	for _, r := range allRecords() {
+		if r.PaneID == t {
+			return r.Name
+		}
+		for _, w := range recWorktrees(r) {
+			if norm(w.Path) == norm(t) {
+				return r.Name
+			}
+		}
+	}
+	return ""
 }
 
 func cmdAdopt(argv []string) {

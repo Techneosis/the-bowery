@@ -164,7 +164,11 @@ func findOrphans() ([]orphan, error) {
 				owner = owners[0].name
 				note = fmt.Sprintf("dispatched to %s, now gone", owner)
 				if r := recs[owner]; r != nil {
-					if ok, _ := resumable(r); ok {
+					ok, rerr := resumable(r)
+					if rerr != nil {
+						warn("%s: can't tell whether it can be resumed: %v", owner, herdrMsg(rerr))
+					}
+					if ok {
 						note += fmt.Sprintf("; bowery resume %s can still use it, done ends that", owner)
 						resOK, resN = true, r.Resumes
 					}

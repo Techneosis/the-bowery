@@ -586,13 +586,33 @@ class Resume(Bed):
         self.resume("racy")
         self.assertIsNotNone(self.agent("racy"))
 
-    def test_the_lock_is_let_go_after_a_failure(self):
+    def test_done_by_pane_or_worktree_takes_the_agents_lock(self):
+        a = self.dispatch("bywt", "--worktree", "bywt", "--cwd", self.repo)
+        with self.lock("bywt"):
+            self.refused("of bywt is running", "done", a["pane_id"])
+            self.refused("of bywt is running", "done", str(self.wt / "repo" / "bywt"), "--force")
+            self.assertIsNotNone(self.agent("bywt"), "nothing was done")
+        self.assertIn("nothing to tear down", self.ok("done", "typo-name"))
+        self.assertFalse(any((self.state / "locks").glob("typo-name.*")), "no lock for a name with no record")
+        self.ok("done", "bywt", "--force")
+
+    def test_a_failed_resume_doesnt_wedge_the_next(self):
         self.dispatch("fails", "--cwd", self.repo)
         self.kill("fails")
         rc, _ = self.bowery("resume", "fails", env={"FAKE_PROMPT_FAIL": "1"})
         self.assertNotEqual(rc, 0)
         self.kill("fails")
         self.resume("fails")
+
+    def test_dispatch_wont_replace_a_record(self):
+        self.dispatch("kept", "--cwd", self.repo)
+        self.kill("kept")
+        self.resume("kept")
+        self.kill("kept")
+        before = self.records("kept")[0].read_text()
+        self.refused("already has a dispatch record; bowery resume kept", "dispatch", "kept", "--cwd", self.repo)
+        self.assertEqual(self.records("kept")[0].read_text(), before, "its resumes and session are kept")
+        self.assertIsNone(self.agent("kept"))
 
     def test_a_refused_resume_leaves_the_state_folder_as_it_was(self):
         self.dispatch("st", "--cwd", self.repo)
@@ -614,7 +634,7 @@ class Resume(Bed):
         self.refused("can't read", "resume", "stamp", "--not-within", "10m", "--if-dead")
         rec["resumed"] = "2999-01-01T00:00:00+00:00"  # a clock that ran ahead
         f.write_text(json.dumps(rec))
-        self.assertIn("within --not-within", self.ok("resume", "stamp", "--not-within", "10m", "--if-dead"))
+        self.assertIn("in the future (counted as now)", self.ok("resume", "stamp", "--not-within", "10m", "--if-dead"))
         # Too soon AND its directory gone: the refusal wins, even under --if-dead.
         d = self.t / "gone-dir"
         d.mkdir()

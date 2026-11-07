@@ -162,7 +162,7 @@ func resumeOne(name string, o resumeOpts) error {
 	if r := loadRecord(name); r != nil {
 		rec = r // as it is now we hold the lock
 	} else {
-		return refuse("%s's dispatch record went while waiting (a done ran)", name)
+		return refuse("%s's dispatch record went just now (a done finished first)", name)
 	}
 
 	// ---- checks; nothing is changed, not even a record file, until all pass
@@ -270,11 +270,12 @@ func resumeOne(name string, o resumeOpts) error {
 			return refuse("%s's record says it was resumed at %q, which bowery can't read, so --not-within can't be checked", name, rec.Resumed)
 		}
 		ago := time.Since(t)
+		when := ago.Round(time.Second).String() + " ago"
 		if ago < 0 {
-			ago = 0 // a clock that ran ahead: count it as just now
+			ago, when = 0, "in the future (counted as now)" // a clock that ran ahead
 		}
 		if ago < o.notWithin {
-			why := fmt.Sprintf("it was resumed %s ago, within --not-within %s", ago.Round(time.Second), o.notWithin)
+			why := fmt.Sprintf("it was resumed %s, within --not-within %s", when, o.notWithin)
 			if o.ifDead {
 				return &skipped{why}
 			}
@@ -471,14 +472,14 @@ func nameLock(name string) (unlock func(), held bool, err error) {
 	p := filepath.Join(dir, name+"."+serverTag()+".lock")
 	f, err := os.OpenFile(p, os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
-		return nil, false, fail("resume lock: %v", err)
+		return nil, false, fail("lock on %s: %v", name, err)
 	}
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		f.Close()
 		if errors.Is(err, syscall.EWOULDBLOCK) {
 			return nil, true, nil
 		}
-		return nil, false, fail("resume lock: %v", err)
+		return nil, false, fail("lock on %s: %v", name, err)
 	}
 	return func() { f.Close() }, false, nil
 }
