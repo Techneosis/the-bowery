@@ -25,7 +25,7 @@ _bowery() {
         --machine)
             COMPREPLY=($(compgen -W "$(herdr machine list --json 2>/dev/null | sed -n 's/.*"label": *"\([^"]*\)".*/\1/p')" -- "$cur"))
             return ;;
-        --worktree|--base|--pane|--from|--model|--timeout|--as|--launcher) return ;;
+        --worktree|--base|--pane|--from|--model|--timeout|--as|--launcher|--not-within) return ;;
     esac
 
     local names
@@ -46,7 +46,7 @@ _bowery() {
                 COMPREPLY=($(compgen -d -- "$cur"))
             fi ;;
         resume)
-            [[ $cur == -* ]] && COMPREPLY=($(compgen -W "--swarm --workspace --gated --ungated --launcher --no-launcher --dry-run --timeout --machine --" -- "$cur")) \
+            [[ $cur == -* ]] && COMPREPLY=($(compgen -W "--swarm --workspace --gated --ungated --launcher --no-launcher --if-dead --not-within --dry-run --timeout --machine --" -- "$cur")) \
                 || COMPREPLY=($(compgen -W "$(bowery names 2>/dev/null)" -- "$cur")) ;;
         mute|unmute)
             [[ $cur == -* ]] && COMPREPLY=($(compgen -W "--machine" -- "$cur")) \

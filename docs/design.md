@@ -207,6 +207,14 @@ fails takes back what it made. A reused pane back at a bare shell is moved
 back to where it was; one with something left running in it is never typed
 into: closed if bowery made it, else left with a warning.
 
+**Unattended** (a mail hook, a job): `--if-dead` makes "it's alive" and
+"another resume of it is running" a quiet exit 0 rather than a refusal,
+so a caller needs no checks of its own; every other refusal still fails.
+`--not-within DUR` refuses an agent resumed that recently, so a seat that
+dies on start can't be restarted every minute. One resume of a name runs
+at a time (a lock per name and server, taken without waiting), so two
+callers can't both find it dead and start it twice.
+
 Only a record makes an agent resumable: an agent bowery didn't dispatch (a
 pane another tool started) has none, and is out of reach.
 

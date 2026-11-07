@@ -13,7 +13,7 @@ const usage = `bowery: send agents out into herdr, and bring them home with done
   bowery dispatch <name> [placement] [options] [-- <prompt>]
   bowery done <name|pane|worktree-path>... [--force] [--keep-worktree] [--keep-branch] [--dry-run]
   bowery resume <name> [--swarm|--workspace] [--gated|--ungated] [--launcher CMD|--no-launcher]
-                [--machine L] [--timeout MS] [--dry-run] [-- <prompt>]
+                [--if-dead] [--not-within DUR] [--machine L] [--timeout MS] [--dry-run] [-- <prompt>]
   bowery watch <config> [--poll 30s] [--max 45m]   (bowery watch --help)
 
 dispatch: make (or take) a pane, start the agent, tag it quiet, optionally
@@ -105,6 +105,10 @@ other commands
                            while its old tab is open; and for a pre-0.3.0
                            record without --gated or --ungated. --dry-run
                            says where.
+                           For a hook or a job: --if-dead does nothing (exit
+                           0) when the agent is alive or another resume of it
+                           is running; --not-within DUR refuses one resumed
+                           that recently. One resume of a name runs at a time.
   adopt <name> <path>...   record more worktrees as <name>'s
   orphans [--machine L] [--json]
                            what done would clean up (and which dead agents

@@ -530,6 +530,48 @@ class Resume(Bed):
     def test_a_launcher_needs_claude(self):
         self.refused("only supported with --kind claude", "dispatch", "cx2", "--kind", "codex", "--launcher", "x")
 
+    # ------------------------------------------------------------ unattended: --if-dead, --not-within, the lock
+
+    def test_if_dead_does_nothing_to_a_live_agent_and_resumes_a_dead_one(self):
+        self.dispatch("gone1", "--cwd", self.repo)
+        snap = self.unchanged("gone1")
+        out = self.ok("resume", "gone1", "--if-dead")
+        self.assertIn("alive", out)
+        self.assertIn("nothing to do", out)
+        self.assertEqual(self.unchanged("gone1"), snap)
+        self.kill("gone1")
+        self.ok("resume", "gone1", "--if-dead", "--", "1 unread letter")
+        self.assertTrue(self.agent("gone1")["prompts"][0]["text"].endswith("\n\n1 unread letter"))
+        # Other refusals still fail under --if-dead: a hook must see them.
+        self.refused("no dispatch record", "resume", "nobody", "--if-dead")
+
+    def test_not_within_keeps_a_crash_looping_agent_from_restarting(self):
+        self.dispatch("loop", "--cwd", self.repo)
+        self.kill("loop")
+        self.resume("loop")
+        self.kill("loop")
+        snap = self.unchanged("loop")
+        self.refused("within --not-within 1h0m0s", "resume", "loop", "--not-within", "1h")
+        self.assertIn("nothing to do", self.ok("resume", "loop", "--not-within", "1h", "--if-dead"))
+        self.assertEqual(self.unchanged("loop"), snap)
+        self.refused("takes a duration", "resume", "loop", "--not-within", "soon")
+        self.resume("loop", "--not-within", "1ms")
+        self.assertEqual(self.record("loop")["resumes"], 2)
+
+    def test_one_resume_of_a_name_at_a_time(self):
+        import fcntl
+        self.dispatch("racy", "--cwd", self.repo)
+        self.kill("racy")
+        tag = self.records("racy")[0].name.split(".")[1]
+        with open(self.state / f".racy.{tag}.resume.lock", "w") as f:
+            fcntl.flock(f, fcntl.LOCK_EX)  # another resume, mid-way
+            snap = self.unchanged("racy")
+            self.refused("another resume of racy is running", "resume", "racy")
+            self.assertIn("nothing to do", self.ok("resume", "racy", "--if-dead"))
+            self.assertEqual(self.unchanged("racy"), snap)
+        self.resume("racy")
+        self.assertIsNotNone(self.agent("racy"))
+
     # ------------------------------------------------------------ orphans and list
 
     def test_orphans_shows_an_agent_that_quit_to_its_shell(self):

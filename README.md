@@ -188,7 +188,7 @@ bowery dispatch <name> [placement] [options] [-- <prompt>]
     --wait                   block until the agent settles after its prompt
 
 bowery done <name|pane|path>...   bring them home  [--force] [--keep-worktree] [--keep-branch] [--dry-run] [--machine L]
-bowery resume <name> [--swarm|--workspace] [--gated|--ungated] [--launcher CMD|--no-launcher] [--dry-run] [-- <prompt>]   bring a dead one back
+bowery resume <name> [--swarm|--workspace] [--gated|--ungated] [--launcher CMD|--no-launcher] [--if-dead] [--not-within DUR] [--dry-run] [-- <prompt>]   bring a dead one back
 bowery adopt <name> <path>...     record more worktrees as the agent's
 bowery orphans [--machine L] [--json]   what done would clean up
 bowery list [--machine L]         agents, quiet or loud, who can be resumed, and how many strays

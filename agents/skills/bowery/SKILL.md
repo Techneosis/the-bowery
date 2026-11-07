@@ -201,6 +201,11 @@ from before 0.3.0 doesn't say whether the agent was gated: pass `--gated` or
 `done <path>` on its worktree removes the worktree resume needs. Resume first
 if the work isn't finished.
 
+**From a hook or a job** (start a seat when mail comes):
+`bowery resume <name> --if-dead --not-within 10m -- "<why>"`. `--if-dead`
+does nothing when it's alive or already being resumed; `--not-within` keeps
+a seat that keeps dying from being restarted in a loop.
+
 If a resume fails after the agent started ("is running again in ..."), the
 record already points at it: send the notice yourself, or `done` it.
 

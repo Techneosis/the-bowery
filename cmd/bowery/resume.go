@@ -5,9 +5,12 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
+	"time"
 )
 
 // resumeNotice is the first thing a resumed agent is told. It may already
@@ -22,11 +25,13 @@ type resumeOpts struct {
 	launcher           string // overrides the record's launcher
 	noLauncher         bool   // start with herdr agent start, dropping the record's launcher
 	dryRun             bool
+	ifDead             bool          // a no-op (exit 0) when the agent is alive or being resumed
+	notWithin          time.Duration // refuse if it was resumed this recently
 	prompt             []string
 }
 
 const resumeUsage = "bowery resume <name> [--swarm|--workspace] [--gated|--ungated] [--launcher CMD|--no-launcher] " +
-	"[--machine LABEL] [--timeout MS] [--dry-run] [-- <prompt>]"
+	"[--if-dead] [--not-within DUR] [--machine LABEL] [--timeout MS] [--dry-run] [-- <prompt>]"
 
 func cmdResume(argv []string) {
 	// Everything after a literal -- is the prompt, flags and all.
@@ -60,6 +65,18 @@ func cmdResume(argv []string) {
 			i += used
 		case "--no-launcher":
 			o.noLauncher = true
+		case "--if-dead":
+			o.ifDead = true
+		case "--not-within":
+			if i+1 >= len(argv) {
+				die("--not-within needs a duration (10m, 1h)")
+			}
+			d, err := time.ParseDuration(argv[i+1])
+			if err != nil || d <= 0 {
+				die("--not-within takes a duration like 10m or 1h (got '%s')", argv[i+1])
+			}
+			o.notWithin = d
+			i++
 		case "--timeout":
 			if i+1 >= len(argv) {
 				die("--timeout needs a value")
@@ -95,10 +112,27 @@ func cmdResume(argv []string) {
 	if err := pickMachine(name, explicit); err != nil {
 		die("resume: %v", herdrMsg(err))
 	}
-	err := resumeOne(name, o)
+	// One resume of a name at a time: two callers (two letters arriving at
+	// once) can't both pass "is it alive?" before either starts it.
+	unlock, held, err := resumeLock(name)
+	if err != nil {
+		die("resume %s: %v", name, err)
+	}
+	if held {
+		if o.ifDead {
+			say("%s: another resume of it is running; nothing to do", name)
+			return
+		}
+		die("resume %s: refused, nothing changed: another resume of %s is running", name, name)
+	}
+	defer unlock()
+	err = resumeOne(name, o)
 	var rf *Refused
+	var sk *skipped
 	switch {
 	case err == nil:
+	case errors.As(err, &sk):
+		say("%s: %v; nothing to do", name, sk.why)
 	case errors.As(err, &rf):
 		die("resume %s: refused, nothing changed: %v", name, err)
 	default:
@@ -151,7 +185,19 @@ func resumeOne(name string, o resumeOpts) error {
 	}
 	for _, a := range ags {
 		if a.Name == name {
+			if o.ifDead {
+				return &skipped{fmt.Sprintf("it's alive (%s, in %s)", a.AgentStatus, a.PaneID)}
+			}
 			return refuse("%s is still alive (%s, in %s); nothing to resume", name, a.AgentStatus, a.PaneID)
+		}
+	}
+	if o.notWithin > 0 && rec.Resumed != "" {
+		if t, err := time.Parse("2006-01-02T15:04:05-07:00", rec.Resumed); err == nil && time.Since(t) < o.notWithin {
+			why := fmt.Sprintf("it was resumed %s ago, within --not-within %s", time.Since(t).Round(time.Second), o.notWithin)
+			if o.ifDead {
+				return &skipped{why}
+			}
+			return refuse("%s", why)
 		}
 	}
 	if rec.Session == "" {
@@ -382,6 +428,32 @@ func undoReusedPane(rec *Record, pane string, cd bool, was string) {
 	default:
 		warn("the failed start may have left claude running in %s, which isn't bowery's to close; look at it", pane)
 	}
+}
+
+// skipped is --if-dead's "nothing to do": not an error, not a refusal.
+type skipped struct{ why string }
+
+func (s *skipped) Error() string { return s.why }
+
+// resumeLock takes the per-name resume lock without waiting. held is true
+// when another resume of the name has it.
+func resumeLock(name string) (unlock func(), held bool, err error) {
+	if err := os.MkdirAll(stateDir(), 0o755); err != nil {
+		return nil, false, err
+	}
+	p := filepath.Join(stateDir(), "."+name+"."+serverTag()+".resume.lock")
+	f, err := os.OpenFile(p, os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return nil, false, fail("resume lock: %v", err)
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		f.Close()
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			return nil, true, nil
+		}
+		return nil, false, fail("resume lock: %v", err)
+	}
+	return func() { f.Close() }, false, nil
 }
 
 // identityStill refuses when the record's --as and today's config disagree:
