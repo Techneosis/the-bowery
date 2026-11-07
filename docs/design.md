@@ -214,15 +214,19 @@ so a caller needs no checks of its own; every other refusal still fails.
 dies on start can't be restarted every minute. It's the last check, so
 under `--if-dead` "too soon" never hides a refusal a person needs to see;
 a `resumed` time bowery can't read is a refusal, and one in the future
-counts as just now. `resume`, `dispatch` and `done` each hold a lock on the
-agent's name (per name and server, taken without waiting), so a hook's
-resume can't race another resume, a dispatch or a done of the same agent:
-`resume` takes it once the record is known; `done` takes it for the record
-its target means (a name, a pane or a worktree path), and none when no
-record does; `dispatch` takes it for the new name and lets go once the
-record is written, before its prompt, so `--wait` doesn't hold it.
+counts as just now. `resume` and `dispatch` each hold a lock on the agent's
+name (per name and server, taken without waiting), so a hook's resume can't
+race another resume or a dispatch of the same agent: `resume` takes it once
+the record is known; `dispatch` takes it for the new name and lets go once
+the record is written, before its prompt, so `--wait` doesn't hold it.
+`done` doesn't take it yet: it's a person's command, and naming the agent a
+target means (a name, a pane, a worktree path) before acting has edges of
+its own.
 `dispatch` of a name that already has a record is refused: replacing it
-would lose the agent's session and resume count. The lock files live in the state dir's `locks/`
+would lose the agent's session and resume count (`done <worktree path>`
+keeps the record; `done <name>` clears it). Once its record is written, a
+failed sound tag or prompt says the agent is up and recorded, and prints
+its JSON line. The lock files live in the state dir's `locks/`
 folder and stay there: removing one would race the next taker.
 
 Only a record makes an agent resumable: an agent bowery didn't dispatch (a

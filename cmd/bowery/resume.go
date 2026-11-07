@@ -146,7 +146,7 @@ func resumeOne(name string, o resumeOpts) error {
 		}
 		return refuse("no dispatch record for %s%s; resume only brings back an agent bowery dispatched", name, where)
 	}
-	// One of resume, dispatch or done on a name at a time: two callers (two
+	// One resume or dispatch of a name at a time: two callers (two
 	// letters arriving at once) can't both find it dead and start it.
 	unlock, held, err := nameLock(name)
 	if err != nil {
@@ -154,9 +154,9 @@ func resumeOne(name string, o resumeOpts) error {
 	}
 	if held {
 		if o.ifDead {
-			return &skipped{"another resume, dispatch or done of it is running"}
+			return &skipped{"another resume or dispatch of it is running"}
 		}
-		return refuse("another resume, dispatch or done of %s is running", name)
+		return refuse("another resume or dispatch of %s is running", name)
 	}
 	defer unlock()
 	if r := loadRecord(name); r != nil {
@@ -460,14 +460,15 @@ func parseStamp(s string) (time.Time, bool) {
 	return time.Time{}, false
 }
 
-// nameLock takes the lock on a name, per server, without waiting: resume,
-// dispatch and done hold it while they check and change that agent. held
+// nameLock takes the lock on a name, per server, without waiting: resume
+// and dispatch hold it while they check and change that agent (done
+// doesn't yet). held
 // is true when another of them has it. Lock files live in the state dir's
 // locks/ folder and stay there (removing one would race a waiter).
 func nameLock(name string) (unlock func(), held bool, err error) {
 	dir := filepath.Join(stateDir(), "locks")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return nil, false, fail("lock: %v", err)
+		return nil, false, fail("lock on %s: making %s: %v", name, dir, err)
 	}
 	p := filepath.Join(dir, name+"."+serverTag()+".lock")
 	f, err := os.OpenFile(p, os.O_CREATE|os.O_WRONLY, 0o644)

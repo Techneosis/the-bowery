@@ -570,15 +570,14 @@ class Resume(Bed):
     def state_files(self):
         return sorted(str(p.relative_to(self.state)) for p in self.state.rglob("*") if "locks" not in p.parts)
 
-    def test_one_resume_dispatch_or_done_of_a_name_at_a_time(self):
+    def test_one_resume_or_dispatch_of_a_name_at_a_time(self):
         self.dispatch("racy", "--cwd", self.repo)
         self.dispatch("other", "--cwd", self.repo)
         self.kill("racy")
         with self.lock("racy"):
             snap = self.unchanged("racy")
-            self.refused("another resume, dispatch or done of racy is running", "resume", "racy")
+            self.refused("another resume or dispatch of racy is running", "resume", "racy")
             self.assertIn("nothing to do", self.ok("resume", "racy", "--if-dead"))
-            self.refused("of racy is running", "done", "racy")
             self.refused("of racy is running", "dispatch", "racy", "--cwd", self.repo)
             self.assertEqual(self.unchanged("racy"), snap)
             self.kill("other")
@@ -586,15 +585,14 @@ class Resume(Bed):
         self.resume("racy")
         self.assertIsNotNone(self.agent("racy"))
 
-    def test_done_by_pane_or_worktree_takes_the_agents_lock(self):
-        a = self.dispatch("bywt", "--worktree", "bywt", "--cwd", self.repo)
-        with self.lock("bywt"):
-            self.refused("of bywt is running", "done", a["pane_id"])
-            self.refused("of bywt is running", "done", str(self.wt / "repo" / "bywt"), "--force")
-            self.assertIsNotNone(self.agent("bywt"), "nothing was done")
-        self.assertIn("nothing to tear down", self.ok("done", "typo-name"))
-        self.assertFalse(any((self.state / "locks").glob("typo-name.*")), "no lock for a name with no record")
-        self.ok("done", "bywt", "--force")
+    def test_a_dispatch_that_fails_after_its_record_says_the_agent_is_up(self):
+        rc, out = self.bowery("dispatch", "halfway", "--cwd", self.repo, "--", "hello", env={"FAKE_PROMPT_FAIL": "1"})
+        self.assertNotEqual(rc, 0, out)
+        self.assertIn("halfway is up in", out)
+        self.assertIn("recorded, but its prompt failed", out)
+        self.assertIn('"name": "halfway"', out, "its JSON line, so a caller knows where it is")
+        self.assertEqual(self.record("halfway")["pane_id"], self.agent("halfway")["pane_id"])
+        self.ok("done", "halfway", "--force")
 
     def test_a_failed_resume_doesnt_wedge_the_next(self):
         self.dispatch("fails", "--cwd", self.repo)
@@ -610,7 +608,7 @@ class Resume(Bed):
         self.resume("kept")
         self.kill("kept")
         before = self.records("kept")[0].read_text()
-        self.refused("already has a dispatch record; bowery resume kept", "dispatch", "kept", "--cwd", self.repo)
+        self.refused("bowery resume kept, or bowery done kept first", "dispatch", "kept", "--cwd", self.repo)
         self.assertEqual(self.records("kept")[0].read_text(), before, "its resumes and session are kept")
         self.assertIsNone(self.agent("kept"))
 

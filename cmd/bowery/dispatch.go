@@ -175,7 +175,7 @@ func cmdDispatch(argv []string) {
 		}
 	}
 
-	// Not while a resume or done of the same name is under way.
+	// Not while a resume or another dispatch of the same name is under way.
 	// Its lock file is the one file dispatch makes before it knows the start
 	// works; the record follows.
 	unlockName, held, err := nameLock(name)
@@ -183,13 +183,13 @@ func cmdDispatch(argv []string) {
 		die("%v", err)
 	}
 	if held {
-		die("dispatch %s: refused, nothing changed: a resume, dispatch or done of %s is running", name, name)
+		die("dispatch %s: refused, nothing changed: a resume or dispatch of %s is running", name, name)
 	}
 	if loadRecord(name) != nil {
 		// Replacing it would forget the agent's session and its resumes
 		// (and with them --not-within's guard).
-		die("dispatch %s: refused, nothing changed: %s already has a dispatch record; bowery resume %s, or bowery done %s first",
-			name, name, name, name)
+		die("dispatch %s: refused, nothing changed: %s already has a dispatch record (a done of its worktree path keeps it); "+
+			"bowery resume %s, or bowery done %s first", name, name, name, name)
 	}
 	defer unlockName() // and keeps the lock's file referenced until dispatch ends
 
@@ -282,19 +282,6 @@ func cmdDispatch(argv []string) {
 	// Recorded: the agent is done's and resume's to act on from here, so
 	// let go of the name before the prompt (which --wait can hold for long).
 	unlockName()
-	if err := setSound(pane, o.sound); err != nil {
-		die("%v", herdrMsg(err))
-	}
-	if len(o.prompt) > 0 {
-		args := []string{"agent", "prompt", name, strings.Join(o.prompt, " ")}
-		if o.wait {
-			args = append(args, "--wait")
-		}
-		if err := herdr(nil, args...); err != nil {
-			die("%v", herdrMsg(err))
-		}
-	}
-
 	out := []kv{{"name", name}, {"pane_id", p.PaneID}, {"workspace_id", p.WorkspaceID}, {"tab_id", p.TabID}, {"sound", o.sound}}
 	if rec.Worktree != "" {
 		out = append(out, kv{"worktree", rec.Worktree}, kv{"branch", rec.Branch})
@@ -304,6 +291,25 @@ func cmdDispatch(argv []string) {
 	}
 	if as != "" {
 		out = append(out, kv{"as", as})
+	}
+	// From here the agent is up and recorded: a failure says so, so a retry
+	// isn't a puzzle ("already has a record").
+	upBut := func(what string, err error) {
+		fmt.Println(jsonLine(out))
+		die("%s is up in %s and recorded, but %s failed: %v (bowery done %s, or carry on with herdr agent prompt %s)",
+			name, p.PaneID, what, herdrMsg(err), name, name)
+	}
+	if err := setSound(pane, o.sound); err != nil {
+		upBut("tagging its sound", err)
+	}
+	if len(o.prompt) > 0 {
+		args := []string{"agent", "prompt", name, strings.Join(o.prompt, " ")}
+		if o.wait {
+			args = append(args, "--wait")
+		}
+		if err := herdr(nil, args...); err != nil {
+			upBut("its prompt", err)
+		}
 	}
 	fmt.Println(jsonLine(out))
 }
