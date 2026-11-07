@@ -32,6 +32,10 @@ type Config struct {
 	// identity_command. Unset: --as is refused for a local dispatch.
 	IdentityCommand string `toml:"identity_command"`
 	IdentityEnv     string `toml:"identity_env"`
+	// Environment variables that mark a process as another tool's: resume
+	// never starts an agent in a pane whose shell or foreground processes
+	// carry one of these, on this machine or a box.
+	HandsOffEnv []string `toml:"hands_off_env"`
 	// Per saved herdr machine (`herdr machine list`), by label.
 	Machines map[string]MachineConfig `toml:"machines"`
 
@@ -139,6 +143,9 @@ func cmdConfig(args []string) {
 	if cfg.IdentityCommand != "" {
 		fmt.Printf("identity_command = %q\n", cfg.IdentityCommand)
 		fmt.Printf("identity_env = %q\n", cfg.IdentityEnv)
+	}
+	if len(cfg.HandsOffEnv) > 0 {
+		fmt.Printf("hands_off_env = %s\n", tomlList(cfg.HandsOffEnv))
 	}
 	if len(cfg.Models) > 0 {
 		fmt.Println("\n[models]")

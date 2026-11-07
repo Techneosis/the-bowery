@@ -14,7 +14,7 @@ _bowery() {
 
     cmd=${COMP_WORDS[1]}
     if ((COMP_CWORD == 1)); then
-        COMPREPLY=($(compgen -W "dispatch done adopt orphans list mute unmute swarm-tab swarm-last config upgrade version" -- "$cur"))
+        COMPREPLY=($(compgen -W "dispatch done resume adopt orphans list mute unmute swarm-tab swarm-last config upgrade version" -- "$cur"))
         return
     fi
 
@@ -45,10 +45,14 @@ _bowery() {
             else
                 COMPREPLY=($(compgen -d -- "$cur"))
             fi ;;
+        resume)
+            [[ $cur == -* ]] && COMPREPLY=($(compgen -W "--swarm --workspace --dry-run --timeout --machine --" -- "$cur")) \
+                || COMPREPLY=($(compgen -W "$(bowery names 2>/dev/null)" -- "$cur")) ;;
         mute|unmute)
             [[ $cur == -* ]] && COMPREPLY=($(compgen -W "--machine" -- "$cur")) \
                 || COMPREPLY=($(compgen -W "$(bowery names 2>/dev/null)" -- "$cur")) ;;
-        orphans|list) COMPREPLY=($(compgen -W "--machine" -- "$cur")) ;;
+        orphans) COMPREPLY=($(compgen -W "--machine --json" -- "$cur")) ;;
+        list) COMPREPLY=($(compgen -W "--machine" -- "$cur")) ;;
         swarm-tab) [[ $cur == -* ]] && COMPREPLY=($(compgen -W "--cwd --machine" -- "$cur")) ;;
         upgrade) COMPREPLY=($(compgen -W "--check" -- "$cur")) ;;
     esac

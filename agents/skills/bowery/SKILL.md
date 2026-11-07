@@ -1,6 +1,6 @@
 ---
 name: bowery
-description: Dispatch herdr agents with bowery: start them (locally or on a saved herdr machine), tag them quiet, prompt them, collect results, and tear them down with `bowery done`. Use whenever the user says "dispatch" (an agent, a reviewer, a red-teamer, N workers), whenever you decide to hand part of a task to a separate herdr agent instead of an in-process subagent, whenever a dispatched agent finishes (tear it down), and whenever asked what's been left behind (orphans). Covers the one command to use, the swarm workspace, worktrees, remote dispatch with --machine/--as, the sound tag, naming, prompting and waiting, teardown, and the herdr worktree-group hazard.
+description: Dispatch herdr agents with bowery: start them (locally or on a saved herdr machine), tag them quiet, prompt them, collect results, and tear them down with `bowery done`. Use whenever the user says "dispatch" (an agent, a reviewer, a red-teamer, N workers), whenever you decide to hand part of a task to a separate herdr agent instead of an in-process subagent, whenever a dispatched agent finishes (tear it down), whenever a dispatched agent died or was closed with its work unfinished (resume it), and whenever asked what's been left behind (orphans). Covers the one command to use, the swarm workspace, worktrees, remote dispatch with --machine/--as, the sound tag, naming, prompting and waiting, teardown, resuming a dead agent, and the herdr worktree-group hazard.
 ---
 
 # Dispatching agents with bowery
@@ -153,6 +153,37 @@ them: finished dispatched agents still alive, worktrees with no pane in them
 that no live agent's record claims, blank repo-root workspaces, records whose
 agent is gone (and their leftover tab, if any). Clean up only what you
 dispatched; anything else, tell the user.
+
+## Resume rather than re-dispatch
+
+When a dispatched agent's pane died, herdr restarted, the machine rebooted,
+or it was closed by mistake, its work is half done and its conversation is
+the only record of how far it got. Bring it back instead of starting over:
+
+```bash
+bowery resume <name> [--dry-run] [-- <what to do next>]
+```
+
+It starts the agent again in the same worktree, machine and `--as` identity,
+resuming its Claude session, in its own pane if that is still at a shell
+prompt, else a new pane in its own tab, else a new swarm tab (`--workspace`
+for a workspace). Its first message tells it it was resumed and to check what
+it already did before redoing anything; add your own follow-up after `--`.
+Then wait on it and `done` it as usual.
+
+- **Resume** when the work is unfinished and the worktree still holds it:
+  the agent knows what it tried, what failed and what it already sent.
+- **Re-dispatch** (`done` it, then `dispatch` afresh) when the job changed, the
+  conversation went wrong, or the agent finished and you only need a new task.
+- **An agent that places paid or irreversible work** (a review contract, a
+  deploy, a sent message) must check that work's status after a resume, not
+  place it again. Say so in the follow-up if it matters.
+
+It refuses, changing nothing, while the agent is alive, when its record has
+no session (an older dispatch never seen alive since), when its worktree is
+gone, or when the pane it would use now holds someone else's agent or a
+running process. `bowery list` and `bowery orphans` say which dead agents can
+be resumed (`(bowery resume <name>)`).
 
 ## Remote dispatch (`--machine`, `--as`)
 

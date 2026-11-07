@@ -317,6 +317,31 @@ for w in json.load(sys.stdin)["result"]["workspaces"]:
     if w["label"]==sys.argv[1]: print(w["workspace_id"])' "$l")"; herdr workspace close "$id" >/dev/null
 done
 
+echo "== resume: a dead agent comes back with its conversation"
+start rs --worktree rs --cwd "$REPO" -- "Remember the word PELICAN. Reply with just: ok." >/dev/null
+herdr agent wait rs --until idle --until done --timeout 90000 >/dev/null 2>&1
+sess="$(agent_field rs '(a.get("agent_session") or {}).get("value","")')"
+check "herdr reports a session id" test -n "$sess"
+has "dispatch recorded it" "$(cat "$BOWERY_STATE"/rs.*.json)" "\"session\": \"$sess\""
+out="$("$D" resume rs 2>&1)"; rc=$?
+check "resume of a live agent is refused" test $rc -ne 0
+has "says it is alive" "$out" "still alive"
+rstab="$(agent_field rs 'a["tab_id"]')"
+herdr tab close "$rstab" >/dev/null
+hasnt "the agent is gone" "$(agent_names)" "rs"
+has "orphans says it can be resumed" "$("$D" orphans 2>&1)" "(bowery resume rs)"
+out="$("$D" resume rs -- "What word did I ask you to remember? Reply with just the word." 2>&1)"; rc=$?
+check "resume exits 0" test $rc -eq 0 || printf '%s\n' "$out"
+has "the agent is back under its name" "$(agent_names)" "rs"
+check "in its worktree" test "$(agent_field rs 'a["cwd"]')" = "$TMP/worktrees/repo/rs"
+herdr agent wait rs --until idle --until done --timeout 90000 >/dev/null 2>&1; sleep 2
+screen="$(herdr agent read rs 2>&1)"
+has "it remembers the conversation" "$screen" "PELICAN"
+has "and was told it was resumed" "$screen" "You were resumed"
+has "the record counts the resume" "$(cat "$BOWERY_STATE"/rs.*.json)" "\"resumes\": 1"
+"$D" done rs --force >/dev/null 2>&1
+hasnt "done brings it home" "$(agent_names)" "rs"
+
 echo "== hazard: herdr-made worktree group; a sibling must survive every done"
 mk() { herdr worktree create --cwd "$REPO" --branch "$1" --base origin/main --path "$TMP/worktrees/repo/$1" --label "$1" --no-focus \
        | python3 -c 'import json,sys; print(json.load(sys.stdin)["result"]["root_pane"]["pane_id"])'; }

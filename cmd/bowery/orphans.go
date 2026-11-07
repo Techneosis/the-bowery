@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -10,7 +11,27 @@ import (
 	"strings"
 )
 
-type orphan struct{ kind, line, target string }
+// An orphan is one thing done would clean up. line is the text `orphans`
+// prints (other tools parse it: keep its shape); the rest is --json's.
+type orphan struct {
+	kind, line, target string
+
+	Kind      string `json:"kind"`
+	Target    string `json:"target"`
+	Name      string `json:"name,omitempty"`
+	Machine   string `json:"machine,omitempty"`
+	Status    string `json:"status,omitempty"`
+	Pane      string `json:"pane,omitempty"`
+	Path      string `json:"path,omitempty"`
+	Repo      string `json:"repo,omitempty"`
+	Branch    string `json:"branch,omitempty"`
+	Merged    *bool  `json:"merged,omitempty"`
+	State     string `json:"state,omitempty"` // a worktree's: dirty | merged | unmerged
+	Note      string `json:"note,omitempty"`
+	Started   string `json:"started,omitempty"`
+	Resumable bool   `json:"resumable"`
+	Resumes   int    `json:"resumes"`
+}
 
 // checkoutsUnder lists checkout dirs under the worktrees root, without
 // walking into them.
@@ -64,6 +85,10 @@ func findOrphans() ([]orphan, error) {
 		recs[r.Name] = r
 		names = append(names, r.Name)
 	}
+	refreshSessions(ags)
+	for _, r := range allRecords() {
+		recs[r.Name] = r
+	}
 	var out []orphan
 	for _, a := range ags {
 		// A shared box also runs other people's dispatches, quiet-tagged too:
@@ -76,10 +101,15 @@ func findOrphans() ([]orphan, error) {
 				id = a.PaneID
 			}
 			line := fmt.Sprintf("%s  %s  %s  %s", id, a.AgentStatus, a.PaneID, a.Cwd)
-			if r := recs[a.Name]; r != nil && r.Started != "" {
-				line += fmt.Sprintf("  (dispatched %s)", r.Started)
+			o := orphan{kind: "agent", target: id, Name: a.Name, Status: a.AgentStatus, Pane: a.PaneID, Path: a.Cwd}
+			if r := recs[a.Name]; r != nil {
+				if r.Started != "" {
+					line += fmt.Sprintf("  (dispatched %s)", r.Started)
+				}
+				o.Started, o.Resumes, o.Branch, o.Repo = r.Started, r.Resumes, r.Branch, r.Repo
 			}
-			out = append(out, orphan{"agent", line, id})
+			o.line = line
+			out = append(out, o)
 		}
 	}
 	claims := worktreeClaims(ags, ps)
@@ -130,18 +160,24 @@ func findOrphans() ([]orphan, error) {
 					state = "merged"
 				}
 			}
-			whose := ""
+			whose, note, owner := "", "", ""
 			switch {
 			case len(owners) > 0:
-				whose = fmt.Sprintf("  (dispatched to %s, now gone)", owners[0].name)
+				owner = owners[0].name
+				note = fmt.Sprintf("dispatched to %s, now gone", owner)
+				whose = "  (" + note + ")"
 			case machine != "":
-				whose = "  (no record here: maybe another dispatcher's)"
+				note = "no record here: maybe another dispatcher's"
+				whose = "  (" + note + ")"
 			}
 			b := info.branch
 			if b == "" {
 				b = "detached"
 			}
-			out = append(out, orphan{"worktree", fmt.Sprintf("%s  [%s, %s]  no pane is in it%s", path, b, state, whose), path})
+			merged := state == "merged"
+			out = append(out, orphan{kind: "worktree", target: path,
+				line: fmt.Sprintf("%s  [%s, %s]  no pane is in it%s", path, b, state, whose),
+				Name: owner, Path: path, Repo: info.repo, Branch: info.branch, Merged: &merged, State: state, Note: note})
 		}
 	}
 	for _, ws := range all {
@@ -156,8 +192,9 @@ func findOrphans() ([]orphan, error) {
 		if why != "" {
 			note = " — leave it: " + why
 		}
-		out = append(out, orphan{"workspace", fmt.Sprintf("%s (%s) blank repo-root workspace%s", ws.WorkspaceID, ws.Label, note),
-			ws.Worktree.CheckoutPath})
+		out = append(out, orphan{kind: "workspace", target: ws.Worktree.CheckoutPath,
+			line: fmt.Sprintf("%s (%s) blank repo-root workspace%s", ws.WorkspaceID, ws.Label, note),
+			Path: ws.Worktree.CheckoutPath, Repo: ws.Worktree.CheckoutPath, Note: strings.TrimPrefix(note, " — ")})
 	}
 	live := map[string]bool{}
 	for _, a := range ags {
@@ -172,8 +209,20 @@ func findOrphans() ([]orphan, error) {
 		if live[name] || (r.TerminalID != "" && terms[r.TerminalID]) {
 			continue
 		}
+		res, err := resumable(r)
+		if err != nil {
+			return nil, err
+		}
+		hint := ""
+		if res {
+			hint = "  (bowery resume " + name + ")"
+		}
+		rec := orphan{kind: "record", target: name, Name: name, Status: "gone", Repo: r.Repo, Branch: r.Branch,
+			Started: r.Started, Resumable: res, Resumes: r.Resumes}
 		if c := ownedContainer(r, ps, all); c != nil {
-			out = append(out, orphan{"record", fmt.Sprintf("%s: agent gone, its %s %s still open with %d pane(s)", name, c.kind, c.id, len(c.panes)), name})
+			rec.Note = fmt.Sprintf("agent gone, its %s %s still open with %d pane(s)", c.kind, c.id, len(c.panes))
+			rec.line = name + ": " + rec.Note + hint
+			out = append(out, rec)
 			continue
 		}
 		left := false
@@ -184,9 +233,20 @@ func findOrphans() ([]orphan, error) {
 			}
 			left = left || ex
 		}
-		if !left {
-			out = append(out, orphan{"record", name + ": dispatch record with nothing left behind it", name})
+		switch {
+		case !left && len(recWorktrees(r)) == 0 && res:
+			// No worktree, and its directory still there: the agent itself is
+			// all that is missing.
+			rec.Note = "agent gone"
+		case !left:
+			rec.Note = "dispatch record with nothing left behind it"
+		case res:
+			rec.Note = "agent gone, its worktree still there"
+		default:
+			continue
 		}
+		rec.line = name + ": " + rec.Note + hint
+		out = append(out, rec)
 	}
 	return out, nil
 }
@@ -219,6 +279,10 @@ func onMachine[T any](m string, fn func() (T, error)) (T, bool) {
 
 func cmdOrphans(argv []string) {
 	explicit, argv := popMachine(argv)
+	asJSON := false
+	if len(argv) == 1 && argv[0] == "--json" {
+		asJSON, argv = true, nil
+	}
 	if len(argv) > 0 {
 		die("orphans: unexpected %s", strings.Join(argv, " "))
 	}
@@ -232,6 +296,18 @@ func cmdOrphans(argv []string) {
 		found, _ := onMachine(m, findOrphans)
 		per = append(per, perMachine{m, found})
 		any = any || len(found) > 0
+	}
+	if asJSON {
+		list := []orphan{}
+		for _, p := range per {
+			for _, o := range p.found {
+				o.Kind, o.Target, o.Machine = o.kind, o.target, p.m
+				list = append(list, o)
+			}
+		}
+		b, _ := json.MarshalIndent(list, "", "  ")
+		fmt.Println(string(b))
+		return
 	}
 	if !any {
 		say("no orphans")
@@ -305,6 +381,23 @@ func cmdList(argv []string) {
 					nm = "-"
 				}
 				say("%-8s %-4s %-8s %-16s %s", a.PaneID, snd, a.AgentStatus, nm, extra)
+			}
+			refreshSessions(ags)
+			alive := map[string]bool{}
+			for _, a := range ags {
+				alive[a.Name] = true
+			}
+			for _, r := range allRecords() {
+				if alive[r.Name] {
+					continue
+				}
+				if ok, err := resumable(r); err == nil && ok {
+					note := "bowery resume " + r.Name
+					if r.Resumes > 0 {
+						note += fmt.Sprintf("  (resumed %d time(s))", r.Resumes)
+					}
+					say("%-8s %-4s %-8s %-16s %s", "-", r.Sound, "gone", r.Name, note)
+				}
 			}
 			found, err := findOrphans()
 			if err != nil {

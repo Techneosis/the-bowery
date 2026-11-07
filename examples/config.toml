@@ -12,6 +12,11 @@ sound_source = "bowery.sound"
 # under the herdr worktrees dir. ~ is the home of the machine the pane is on.
 trust_roots = ["~/dev"]
 
+# Environment variables that mark a process as another tool's (a review
+# harness, say). resume never starts an agent in a pane whose shell or
+# foreground processes carry one. Default: none.
+# hands_off_env = ["OTHER_TOOL_TAG"]
+
 # Short names for --model. Anything not listed is passed through as written.
 [models]
 # fast = "claude-haiku-4-5"

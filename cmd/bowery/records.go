@@ -49,6 +49,15 @@ type Record struct {
 	Sound       string        `json:"sound"`
 	Worktrees   []RecWorktree `json:"worktrees"`
 	Owns        *Owns         `json:"owns,omitempty"`
+	// What resume needs to start the agent again as it was: its session
+	// (kept fresh while it lives), the directory it was started in (claude
+	// files sessions per directory) and its flags. Older records lack them.
+	Session string `json:"session,omitempty"`
+	Cwd     string `json:"cwd,omitempty"`
+	Gated   bool   `json:"gated,omitempty"`
+	Model   string `json:"model,omitempty"`
+	Resumed string `json:"resumed,omitempty"` // the last resume
+	Resumes int    `json:"resumes,omitempty"` // how many times
 }
 
 func stateDir() string {
@@ -322,4 +331,29 @@ func pickMachine(target, explicit string) error {
 		useMachine(recs[0].Machine, recs[0].As)
 	}
 	return nil
+}
+
+// refreshSessions keeps each record's session id what herdr says its live
+// agent has now (a /clear starts a new one). Only the agent in the record's
+// own terminal counts: a namesake elsewhere is not this agent.
+func refreshSessions(ags []Agent) {
+	byName := map[string]Agent{}
+	for _, a := range ags {
+		if a.Name != "" {
+			byName[a.Name] = a
+		}
+	}
+	for _, r := range allRecords() {
+		a, ok := byName[r.Name]
+		if !ok || a.SessionID() == "" || a.SessionID() == r.Session {
+			continue
+		}
+		if r.TerminalID != "" && a.TerminalID != "" && a.TerminalID != r.TerminalID {
+			continue
+		}
+		r.Session = a.SessionID()
+		if err := writeRecord(r); err != nil {
+			warn("could not update %s's record: %v", r.Name, err)
+		}
+	}
 }

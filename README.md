@@ -81,9 +81,17 @@ clean and the branch is merged (squash and rebase merges count). The main
 checkout is fast-forwarded if it is clean. Every check runs before anything is
 touched: a `done` that refuses has changed nothing, and says why.
 
+**Back from the dead** (`bowery resume <name>`). A courier whose pane died,
+whose herdr restarted, or who was sent home by mistake can be brought back
+with their memory intact: the same name, the same route, the same box, the
+same papers, picking up the conversation where it stopped. The first thing
+they're told is that they were brought back, and to check what they already
+did before doing it again. The book counts each return.
+
 **Strays** (`bowery orphans`). Agents finished but still about, worktrees no
 pane is in and no one's record claims, blank workspaces herdr left behind,
-records whose agent is gone. Read-only: it tells you what `done` would clean.
+records whose agent is gone, and which of those `resume` can bring back.
+Read-only: it tells you what `done` would clean. `--json` for a program.
 
 ---
 
@@ -110,7 +118,14 @@ branch; `--keep-worktree` leaves both.
 closes all its workspaces when its primary's last pane is closed. The Bowery
 never makes groups, and refuses any close that would cascade into one.
 
-**6. Folders are trusted on your say-so only.** Claude asks before working in
+**6. Nobody comes back into someone else's room.** `resume` uses the
+courier's own pane only if it is the same terminal, at a bare shell prompt;
+a pane now holding another agent, or running anything, is refused. It never
+starts a courier in a pane carrying another tool's marker (`hands_off_env` in
+the config), and it refuses while the courier is still about, or when their
+route is gone.
+
+**7. Folders are trusted on your say-so only.** Claude asks before working in
 a folder it hasn't seen. The Bowery answers yes under your trust roots (`~/dev`
 by default, and the herdr worktrees dir) and nowhere else.
 
@@ -138,6 +153,7 @@ including `done`'s checks, runs through it.
 ```
 bowery dispatch fixer --machine swarm-box --as alice --worktree fix-auth --cwd ~/src/app -- "..."
 bowery done fixer                  # found by its record; no flag needed
+bowery resume fixer                # likewise: back on the box, as alice
 bowery orphans                     # this machine, and every box you have a record on
 ```
 
@@ -165,9 +181,10 @@ bowery dispatch <name> [placement] [options] [-- <prompt>]
     --wait                   block until the agent settles after its prompt
 
 bowery done <name|pane|path>...   bring them home  [--force] [--keep-worktree] [--keep-branch] [--dry-run] [--machine L]
+bowery resume <name> [--swarm|--workspace] [--dry-run] [-- <prompt>]   bring a dead one back
 bowery adopt <name> <path>...     record more worktrees as the agent's
-bowery orphans [--machine L]      what done would clean up
-bowery list [--machine L]         agents, quiet or loud, and how many strays
+bowery orphans [--machine L] [--json]   what done would clean up
+bowery list [--machine L]         agents, quiet or loud, who can be resumed, and how many strays
 bowery mute|unmute <name|pane>... set or clear the sound=off tag
 bowery swarm-tab <label> [--cwd DIR] [--machine L]   a rooftop tab with no agent; prints its pane
 bowery swarm-last                 move the swarm workspace to the bottom
@@ -192,6 +209,7 @@ optional; `bowery config` prints what is in force, and
 swarm = "swarm"                 # the rooftop workspace's name
 sound_source = "bowery.sound"   # the pane-metadata source of the sound=off token
 trust_roots = ["~/dev"]         # folder-trust is answered under these (+ the worktrees dir)
+hands_off_env = []              # env vars marking another tool's processes: resume never lands there
 
 [models]                        # short names for --model (anything else passes through)
 fast = "claude-haiku-4-5"

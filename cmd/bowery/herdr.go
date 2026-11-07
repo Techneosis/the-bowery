@@ -85,6 +85,22 @@ type Agent struct {
 	Tokens      map[string]string `json:"tokens"`
 	Cwd         string            `json:"cwd"`
 	Title       string            `json:"terminal_title_stripped"`
+	TerminalID  string            `json:"terminal_id"`
+	Session     *AgentSession     `json:"agent_session"`
+}
+
+// AgentSession is the agent's own conversation id, as herdr reports it (for
+// claude, the id `claude --resume` takes).
+type AgentSession struct {
+	Kind  string `json:"kind"`
+	Value string `json:"value"`
+}
+
+func (a Agent) SessionID() string {
+	if a.Session == nil || a.Session.Kind != "id" {
+		return ""
+	}
+	return a.Session.Value
 }
 
 // herdrRaw runs a herdr CLI command against the current server and returns

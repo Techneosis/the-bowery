@@ -15,6 +15,11 @@ What it models, because bowery's behaviour depends on it:
   and Down Enter answers it (a bare Enter quits the agent);
 - `pane close` on the last pane of a worktree group's primary closes the whole
   group, and `workspace close` refuses such a primary;
+- each claude agent has a session id, reported as `agent_session` in
+  `agent list` (herdr 0.9.5's shape); `-- --resume <id>` starts it on that
+  session, otherwise it gets a new one;
+- `pane process-info` reports a real pid when a test gives the pane one
+  (`pid`), so bowery can read that process's environment;
 - `pane run`: `sleep ...` occupies the pane's foreground (process-info shows
   it), `exec <cmd> <who>` turns the pane's shell into whatever environment
   `<cmd> <who> env` prints, anything else runs under bash with the pane's
@@ -29,6 +34,7 @@ import os
 import shlex
 import subprocess
 import sys
+import uuid
 
 DIR = os.environ["FAKE_HERDR_DIR"]
 TRUST = "Do you trust the files in this folder?\n> No, exit\n  Yes, I trust this folder"
@@ -108,9 +114,12 @@ def pane_view(s, p):
 
 def agent_view(s, a):
     p = pane(s, a["pane_id"])
-    return {"name": a["name"], "pane_id": a["pane_id"], "agent": a["agent"], "agent_status": a["agent_status"],
-            "tokens": dict(p.get("tokens", {})) if p else {}, "cwd": p["cwd"] if p else "",
-            "terminal_title_stripped": a["agent"]}
+    v = {"name": a["name"], "pane_id": a["pane_id"], "agent": a["agent"], "agent_status": a["agent_status"],
+         "tokens": dict(p.get("tokens", {})) if p else {}, "cwd": p["cwd"] if p else "",
+         "terminal_id": p["terminal_id"] if p else "", "terminal_title_stripped": a["agent"]}
+    if a.get("session"):
+        v["agent_session"] = {"agent": a["agent"], "kind": "id", "source": "herdr:" + a["agent"], "value": a["session"]}
+    return v
 
 
 # ------------------------------------------------------------------ model
@@ -289,7 +298,7 @@ def run(s, argv):
             save(s)
             out(cid, {"type": "ok"})
         if verb == "process-info":
-            shell = 1000 + s["panes"].index(p)
+            shell = p.get("pid") or 1000 + s["panes"].index(p)
             fg = [{"pid": shell, "name": "bash"}] if not p.get("busy") else [{"pid": 50000 + shell, "name": p["busy"]}]
             out(cid, {"type": "pane_process_info", "process_info": {
                 "pane_id": pid, "shell_pid": shell, "foreground_process_group_id": fg[0]["pid"], "foreground_processes": fg}})
@@ -310,7 +319,9 @@ def run(s, argv):
                 err(cid, "agent_name_taken", f"agent {name} already exists")
             extra = args[args.index("--") + 1:] if "--" in args else []
             a = {"name": name, "pane_id": pid, "agent": opt(args, "--kind", "claude"), "agent_status": "idle",
-                 "args": extra, "prompts": [], "env": dict(p["env"]), "screen": "> "}
+                 "args": extra, "prompts": [], "env": dict(p["env"]), "screen": "> ", "cwd": p["cwd"]}
+            if a["agent"] == "claude":
+                a["session"] = opt(extra, "--resume") or str(uuid.uuid4())
             s["agents"][name] = a
             if os.environ.get("FAKE_TRUST_DIALOG", "1") != "0" and not any(under(p["cwd"], t) for t in s["trusted"]):
                 a["agent_status"], a["screen"] = "blocked", TRUST

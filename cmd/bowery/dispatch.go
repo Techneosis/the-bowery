@@ -183,6 +183,7 @@ func cmdDispatch(argv []string) {
 			m = full
 		}
 		extra = append(extra, "--model", m)
+		o.model = m
 	}
 	var agentArgs []string
 	if len(extra) > 0 {
@@ -207,7 +208,8 @@ func cmdDispatch(argv []string) {
 	}
 
 	sock := socketPath()
-	rec := &Record{Name: name, Socket: &sock, Placement: o.placement, Kind: o.kind, Started: nowISO()}
+	rec := &Record{Name: name, Socket: &sock, Placement: o.placement, Kind: o.kind, Started: nowISO(),
+		Gated: o.gated, Model: o.model}
 	here, _ := os.Getwd() // default cwd for a new pane
 	if machine != "" {
 		r, _ := remote()
@@ -242,6 +244,10 @@ func cmdDispatch(argv []string) {
 	}
 	rec.PaneID, rec.TerminalID, rec.WorkspaceID, rec.TabID = p.PaneID, p.TerminalID, p.WorkspaceID, p.TabID
 	rec.CreatedPane, rec.Sound, rec.Worktrees = m.pane != "", o.sound, also
+	rec.Session = sessionIn(p.PaneID)
+	if p.Cwd != "" {
+		rec.Cwd = p.Cwd // where the agent really started: a --pane keeps its own
+	}
 	// A tab or workspace bowery made is the agent's: whatever it opens there
 	// later is its to clean up. A --split or --pane sits beside panes that are
 	// not, so there the agent owns only its own pane.
@@ -361,6 +367,7 @@ func startAgent(name string, o startOpts, from, here string, agentArgs []string,
 	if newCwd == "" {
 		newCwd = here
 	}
+	rec.Cwd = newCwd
 
 	var pane string
 	switch o.placement {
@@ -637,4 +644,20 @@ func cmdSwarmTab(argv []string) {
 		die("%v", herdrMsg(err))
 	}
 	fmt.Println(p)
+}
+
+// sessionIn is the session id of the agent in a pane, or "" when herdr does
+// not (yet) report one. A record without one is filled in later, by any
+// command that sees the agent alive.
+func sessionIn(pane string) string {
+	ags, err := agents()
+	if err != nil {
+		return ""
+	}
+	for _, a := range ags {
+		if a.PaneID == pane {
+			return a.SessionID()
+		}
+	}
+	return ""
 }

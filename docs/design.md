@@ -119,6 +119,48 @@ the default branch.
 An agent whose pane was moved, or that exited back to a shell, is still
 found: by `terminal_id`, which survives both where `pane_id` does not.
 
+## Resume
+
+`resume <name>` starts a dead agent again with its conversation: `claude
+--resume <session>`, in the directory it ran in (claude files sessions per
+directory), with the flags it had (`--gated`, `--model`), on its machine, as
+its `--as`. The first prompt says it was resumed and to check what it already
+did before redoing anything, since an agent may have placed paid or
+irreversible work before it died; a prompt after `--` follows it.
+
+The session id comes from herdr (`agent_session` in `herdr agent list`). It is
+recorded at dispatch and refreshed whenever a command sees the live agent in
+its own terminal (`list`, `orphans`, `watch`, `resume`): a `/clear` gives
+claude a new one. A namesake in another terminal is not the agent, and never
+overwrites it.
+
+Like `done`, it checks everything before it changes anything. It refuses:
+
+- while the agent is alive, or any live agent carries its session (one
+  conversation must not run twice);
+- when the record has no session (written by an older bowery, never seen
+  alive since) or no directory, or the agent is not claude;
+- when its directory or any recorded worktree is gone;
+- when the pane it would use is someone else's: the recorded terminal now
+  holding another agent, or running anything rather than sitting at a shell
+  prompt;
+- when that pane's shell or foreground processes carry a variable named in
+  `hands_off_env`: another tool's processes, read from `/proc` (or `ps -E`)
+  where the pane runs.
+
+Where it lands: the agent's own terminal if it is still open at a shell (the
+agent quit), moved back to its directory if need be; else a new pane in the
+tab or workspace bowery made for it, if that is still open (checked by label,
+as `done` does); else a new place of the kind it had: a swarm tab, or a
+workspace for a `--workspace` agent. A `--split` or `--pane` agent never owned
+the panes around it, so it comes back in a swarm tab rather than beside a
+neighbour. `--swarm` and `--workspace` override. The record's pane, tab,
+workspace and `owns` are rewritten, so `done` brings it home as usual, and
+`resumed` and `resumes` say when and how often.
+
+Only a record makes an agent resumable: an agent bowery didn't dispatch (a
+pane another tool started) has none, and is out of reach.
+
 ## Records
 
 One JSON file per agent per server, in `$XDG_STATE_HOME/bowery`
@@ -141,6 +183,9 @@ apart from the local ones.
 ```
 
 A remote record has `"socket": null` and adds `machine`, `host` and `as`.
+For `resume`: `session`, `cwd`, `gated`, `model`, and after a resume,
+`resumed` and `resumes`. Each is optional, so a record without them still
+loads (and is not resumable without a session).
 `worktrees` is every checkout the agent works in: its own, `--also-worktree`,
 and `adopt`. Records written before `owns` existed are read by their
 placement. The format is the one the Python tool bowery was ported from
@@ -153,7 +198,11 @@ directory and are read as they are.
 are finished but alive; checkouts under the worktrees dir that no pane is in
 and no live agent's record claims (with their state: dirty, merged,
 unmerged); blank repo-root workspaces; and records whose agent is gone (with
-its tab or workspace still open, or with nothing left at all). Locally, an
+its tab or workspace still open, its worktree still there, or nothing left at
+all), each marked `(bowery resume <name>)` when resume can bring it back.
+`--json` prints the same as a list of objects (`kind`, `target`, `name`,
+`machine`, `status`, `repo`, `branch`, `merged`, `state`, `note`,
+`resumable`, `resumes`, ...) for a program; the text format stays as it is. Locally, an
 agent tagged `sound=off` counts as dispatched; on a machine only a record made
 here does, because a shared box runs other people's dispatches too.
 

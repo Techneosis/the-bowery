@@ -12,6 +12,7 @@ const usage = `bowery: send agents out into herdr, and bring them home with done
 
   bowery dispatch <name> [placement] [options] [-- <prompt>]
   bowery done <name|pane|worktree-path>... [--force] [--keep-worktree] [--keep-branch] [--dry-run]
+  bowery resume <name> [--swarm|--workspace] [--dry-run] [-- <prompt>]
   bowery watch <config> [--poll 30s] [--max 45m]   (bowery watch --help)
 
 dispatch: make (or take) a pane, start the agent, tag it quiet, optionally
@@ -81,10 +82,22 @@ other commands
                            working/busy-pane/dirty/unmerged checks (a forced
                            unmerged branch is kept). A remote agent is found
                            by its record; a path on a box needs --machine.
+  resume <name>            start a dead agent again with its conversation
+                           (claude --resume), in its worktree, on its
+                           machine, as its --as: in its own pane if that is
+                           at a shell, else a new pane in its tab, else a new
+                           tab in swarm (--workspace for a workspace). Its
+                           first message says it was resumed. Refuses while
+                           it is alive, without a session in its record,
+                           when its worktree is gone, or when the pane it
+                           would use is someone else's. --dry-run says where.
   adopt <name> <path>...   record more worktrees as <name>'s
-  orphans [--machine L]    what done would clean up, on every server with a
+  orphans [--machine L] [--json]
+                           what done would clean up (and which dead agents
+                           resume can bring back), on every server with a
                            record here. Read-only.
-  list [--machine L]       agents, who is muted, and an orphan count
+  list [--machine L]       agents, who is muted, dead agents that can be
+                           resumed, and an orphan count
   mute|unmute <target>...  set or clear an agent's sound=off tag
   swarm-tab <label> [--cwd DIR] [--machine L]
                            a new tab in swarm with no agent; prints its pane
@@ -124,6 +137,8 @@ func main() {
 		cmdDispatch(rest)
 	case "done":
 		cmdDone(rest)
+	case "resume":
+		cmdResume(rest)
 	case "adopt":
 		cmdAdopt(rest)
 	case "orphans":

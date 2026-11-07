@@ -222,6 +222,7 @@ func agentStatuses(label string) map[string]string {
 	if err != nil {
 		return nil
 	}
+	refreshSessions(ags)
 	out := map[string]string{}
 	for _, a := range ags {
 		out[a.Name] = a.AgentStatus
