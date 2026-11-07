@@ -9,6 +9,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unicode"
 )
 
 const trustText = "trust this folder"
@@ -16,6 +17,7 @@ const trustText = "trust this folder"
 type startOpts struct {
 	placement, dir, pane, from, cwd, sound, kind, model, timeout string
 	launcher                                                     string
+	launcherSet                                                  bool
 	gated, wait                                                  bool
 	branch, base                                                 string
 	also, prompt                                                 []string
@@ -26,10 +28,16 @@ func parseStart(argv []string) startOpts {
 	o := startOpts{placement: "swarm", dir: "right", sound: "off", kind: "claude", timeout: "60000"}
 	valued := map[string]*string{
 		"--pane": &o.pane, "--from": &o.from, "--cwd": &o.cwd, "--kind": &o.kind, "--model": &o.model,
-		"--timeout": &o.timeout, "--launcher": &o.launcher, "--worktree": &o.branch, "--base": &o.base, "--machine": &o.machine, "--as": &o.as,
+		"--timeout": &o.timeout, "--worktree": &o.branch, "--base": &o.base, "--machine": &o.machine, "--as": &o.as,
 	}
 	for i := 0; i < len(argv); i++ {
 		a := argv[i]
+		if a == "--launcher" || strings.HasPrefix(a, "--launcher=") {
+			v, used := launcherArg(argv, i)
+			o.launcher, o.launcherSet = v, true
+			i += used
+			continue
+		}
 		next, hasNext := "", i+1 < len(argv)
 		if hasNext {
 			next = argv[i+1]
@@ -175,13 +183,8 @@ func cmdDispatch(argv []string) {
 	if o.kind == "claude" && !o.gated {
 		extra = append(extra, "--dangerously-skip-permissions")
 	}
-	if o.launcher != "" {
-		if o.kind != "claude" {
-			die("--launcher is only supported with --kind claude (got kind=%s)", o.kind)
-		}
-		if strings.TrimSpace(o.launcher) == "" || strings.ContainsAny(o.launcher, "\n\r") {
-			die("--launcher takes one shell command line")
-		}
+	if o.launcherSet && o.kind != "claude" {
+		die("--launcher is only supported with --kind claude (got kind=%s)", o.kind)
 	}
 	if o.model != "" {
 		if o.kind != "claude" {
@@ -231,6 +234,11 @@ func cmdDispatch(argv []string) {
 	pane, err := startAgent(name, o, from, here, agentArgs, rec, &also, m)
 	if err != nil {
 		undoStart(m)
+		if o.placement == "pane" && o.launcher != "" {
+			// The launcher line ran in the person's own pane: say so, and
+			// type nothing more there.
+			warn("the launcher line was run in your pane %s; look at what it left there", o.pane)
+		}
 		die("%v", err)
 	}
 
@@ -469,6 +477,35 @@ func startAgent(name string, o startOpts, from, here string, agentArgs []string,
 	}
 }
 
+// launcherArg reads --launcher's value at argv[i] (`--launcher CMD` or
+// `--launcher=CMD`) and how many extra words it took. The line is typed
+// into a shell, so it must be one plain line: not empty, no control or
+// format characters (an interrupt, an escape, a bidi override), and not
+// another option taken by mistake (`--launcher --dry-run`).
+func launcherArg(argv []string, i int) (string, int) {
+	v, used := "", 0
+	if strings.HasPrefix(argv[i], "--launcher=") {
+		v = strings.TrimPrefix(argv[i], "--launcher=")
+	} else {
+		if i+1 >= len(argv) {
+			die("--launcher needs a command")
+		}
+		v, used = argv[i+1], 1
+		if strings.HasPrefix(v, "-") {
+			die("--launcher needs a command, not the option %s (use --launcher=%s if that really is the command)", v, v)
+		}
+	}
+	if strings.TrimSpace(v) == "" {
+		die("--launcher needs a command; it's empty")
+	}
+	for _, r := range v {
+		if unicode.IsControl(r) || unicode.In(r, unicode.Cf) {
+			die("--launcher takes one plain command line: it has a control character (%U)", r)
+		}
+	}
+	return v, used
+}
+
 // launchAgent starts the agent through a launcher instead of `herdr agent
 // start`, which only runs claude's own executable: `<launcher> <claude
 // args>` is run in the pane's shell, and the launcher must exec claude (a
@@ -480,7 +517,21 @@ func launchAgent(name, pane, launcher string, agentArgs []string, timeoutMS int)
 	if len(args) > 0 && args[0] == "--" {
 		args = args[1:]
 	}
+	want := "" // the session asked for, if this is a resume
+	for i, a := range args {
+		if a == "--resume" && i+1 < len(args) {
+			want = args[i+1]
+		}
+	}
+	// One deadline for the whole start: --timeout is its total.
 	deadline := time.Now().Add(time.Duration(timeoutMS) * time.Millisecond)
+	left := func() int {
+		ms := int(time.Until(deadline) / time.Millisecond)
+		if ms < 1000 {
+			ms = 1000
+		}
+		return ms
+	}
 	// A fresh pane's shell may not be up yet: wait for a bare prompt.
 	for {
 		p, err := paneGet(pane)
@@ -530,14 +581,23 @@ func launchAgent(name, pane, launcher string, agentArgs []string, timeoutMS int)
 			return err
 		}
 	}
-	if err := herdr(nil, "agent", "wait", name, "--until", "idle", "--until", "blocked", "--timeout", fmt.Sprint(timeoutMS)); err != nil {
+	if want != "" {
+		// A launcher that dropped claude's arguments, or resumed something
+		// else, must not pass for this agent's conversation.
+		if got := sessionIn(pane); got != "" && got != want {
+			return fail("the launcher started claude on session %s in %s, not %s (does it pass its arguments on to claude?)", got, pane, want)
+		} else if got == "" {
+			warn("couldn't confirm the session of the claude in %s; check it's %s", pane, want)
+		}
+	}
+	if err := herdr(nil, "agent", "wait", name, "--until", "idle", "--until", "blocked", "--timeout", fmt.Sprint(left())); err != nil {
 		return err
 	}
 	screen, err := herdrText("agent", "read", name)
 	if err != nil || !strings.Contains(screen, trustText) {
 		return err
 	}
-	ok, _, err := acceptTrustDialog(name, pane, timeoutMS)
+	ok, _, err := acceptTrustDialog(name, pane, left())
 	if err != nil {
 		return err
 	}

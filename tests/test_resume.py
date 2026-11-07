@@ -465,6 +465,51 @@ class Resume(Bed):
         self.assertEqual(self.records("nope"), [])
         self.assertIsNone(self.swarm(), "the tab it made is taken back")
 
+    def test_a_launcher_must_be_one_plain_command(self):
+        self.dispatch("plain", "--cwd", self.repo)
+        self.kill("plain")
+        snap = self.unchanged("plain")
+        self.refused("not the option --dry-run", "resume", "plain", "--launcher", "--dry-run")
+        self.refused("control character", "resume", "plain", "--launcher", "seat\x03 plain")
+        self.refused("control character", "resume", "plain", "--launcher", "seat\u202e plain")
+        self.refused("it's empty", "resume", "plain", "--launcher=")
+        self.assertEqual(self.unchanged("plain"), snap)
+        self.refused("it's empty", "dispatch", "plain2", "--cwd", self.repo, "--launcher", "")
+        self.assertIsNone(self.agent("plain2"))
+        seat = self.launcher()
+        self.resume("plain", f"--launcher={seat} plain")
+        self.assertEqual(self.agent("plain")["env"].get("SEAT_BOX"), "box-plain", "the = form")
+
+    def test_a_launcher_that_drops_the_session_is_refused(self):
+        self.dispatch("drops", "--cwd", self.repo)
+        sess = self.record("drops")["session"]
+        self.kill("drops")
+        lossy = self.launcher("lossy", "exec claude")  # throws claude's arguments away
+        rc, out = self.bowery("resume", "drops", "--launcher", str(lossy))
+        self.assertNotEqual(rc, 0, out)
+        self.assertIn(f"not {sess}", out)
+        self.assertEqual(self.record("drops")["session"], sess, "the record keeps its conversation")
+        self.assertIsNone(self.agent("drops"))
+        self.assertIsNone(self.swarm(), "the tab it made is taken back")
+
+    def test_a_failed_launcher_in_a_pane_that_isnt_bowerys_warns(self):
+        p = self.new_workspace("mine", str(self.repo))
+        bad = self.launcher("not-claude", "echo hello from the launcher")
+        rc, out = self.bowery("dispatch", "inmine", "--pane", p["pane_id"], "--launcher", str(bad), "--timeout", "1500")
+        self.assertNotEqual(rc, 0, out)
+        self.assertIn(f"was run in your pane {p['pane_id']}", out)
+        self.assertIsNotNone(self.pane(p["pane_id"]), "the person's pane is left open")
+
+    def test_a_failed_launcher_in_its_own_pane_is_undone_safely(self):
+        a = self.dispatch("own2", "--cwd", self.repo)
+        self.exit_to_shell("own2")
+        bad = self.launcher("not-claude", "echo hello from the launcher")
+        rc, out = self.bowery("resume", "own2", "--launcher", str(bad), "--timeout", "1500")
+        self.assertNotEqual(rc, 0, out)
+        self.assertIn("must exec claude", out)
+        self.assertIsNotNone(self.pane(a["pane_id"]), "a bare shell is left as it was")
+        self.assertNotIn("launcher", self.record("own2"), "nothing recorded")
+
     def test_a_launcher_needs_claude(self):
         self.refused("only supported with --kind claude", "dispatch", "cx2", "--kind", "codex", "--launcher", "x")
 
@@ -555,6 +600,20 @@ class RemoteResume(Resume.__base__):
         open(self.box / "as.log", "w").close()
         self.ok("resume", "far", "--dry-run")
         self.assertIn("test -d", (self.box / "as.log").read_text(), "the directory test ran as alice")
+
+    def test_a_launcher_on_the_box_runs_after_the_identity(self):
+        seat = self.t / "seat-launch"
+        seat.write_text('#!/bin/bash\nexport SEAT_BOX=box-"$1"; shift; exec claude "$@"\n')
+        seat.chmod(0o755)
+        self.dispatch("farseat", "--machine", BOX, "--as", "alice", "--cwd", "~/dev/app", "--launcher", f"{seat} farseat")
+        a = self.agent("farseat", BOX)
+        self.assertEqual((a["env"].get("BOWERY_AS"), a["env"].get("SEAT_BOX")), ("alice", "box-farseat"))
+        rec = json.loads(self.records("farseat")[0].read_text())
+        self.herdr("tab", "close", rec["tab_id"], machine=BOX)
+        self.ok("resume", "farseat")
+        a = self.agent("farseat", BOX)
+        self.assertEqual((a["env"].get("BOWERY_AS"), a["env"].get("SEAT_BOX")), ("alice", "box-farseat"))
+        self.assertEqual(a["args"], ["--dangerously-skip-permissions", "--resume", rec["session"]])
 
     def test_refusals_on_the_box(self):
         self.dispatch("near", "--machine", BOX, "--as", "alice", "--cwd", "~/dev/app")

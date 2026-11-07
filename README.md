@@ -123,7 +123,8 @@ never makes groups, and refuses any close that would cascade into one.
 **6. Nobody comes back into someone else's room.** `resume` uses the
 courier's own pane only if it is the same terminal, at a bare shell prompt;
 a pane now holding another agent, or running anything, is refused. It never
-starts a courier in a pane carrying another tool's marker (`hands_off_env` in
+starts a courier in a pane whose processes were started with another tool's
+marker (`hands_off_env` in
 the config). It refuses, changing nothing, while the courier or their
 conversation is still about, when their worktree or folder is gone, when the
 papers no longer say who they travel as, or when the room they'd come back to

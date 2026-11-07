@@ -55,11 +55,9 @@ func cmdResume(argv []string) {
 		case "--dry-run":
 			o.dryRun = true
 		case "--launcher":
-			if i+1 >= len(argv) || strings.TrimSpace(argv[i+1]) == "" || strings.ContainsAny(argv[i+1], "\n\r") {
-				die("--launcher takes one shell command line")
-			}
-			o.launcher = argv[i+1]
-			i++
+			v, used := launcherArg(argv, i)
+			o.launcher = v
+			i += used
 		case "--no-launcher":
 			o.noLauncher = true
 		case "--timeout":
@@ -72,6 +70,10 @@ func cmdResume(argv []string) {
 			o.timeout = argv[i+1]
 			i++
 		default:
+			if strings.HasPrefix(a, "--launcher=") {
+				o.launcher, _ = launcherArg(argv, i)
+				continue
+			}
 			if strings.HasPrefix(a, "-") {
 				die("resume: unknown option %s (%s)", a, resumeUsage)
 			}

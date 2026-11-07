@@ -68,7 +68,14 @@ runs `<CMD> <claude's arguments>` in the pane's shell itself, waits for herdr
 to see a claude agent in that pane, names it with `herdr agent rename`,
 answers the folder-trust dialog as a plain start does, and carries on (tag,
 record, prompt). A launcher that doesn't exec claude fails the start, with the
-pane's last lines, and what was made is taken back. The launcher is recorded,
+pane's last lines, and what was made is taken back (in a pane that wasn't
+bowery's, it says the line ran there and leaves it). On a resume, a launcher
+that starts claude on another session than the one asked for (one that
+drops claude's arguments, say) is refused before anything is recorded. The
+line is typed into a shell, so it must be one plain line: not empty, no
+control or format characters, and not an option taken by mistake
+(`--launcher=VALUE` for a command that really starts with `-`). `--timeout`
+is the whole start's total. The launcher is recorded,
 so `resume` starts the agent through it again; `resume --launcher CMD` sets
 one and `--no-launcher` drops it.
 
