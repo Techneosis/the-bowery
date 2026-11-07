@@ -162,7 +162,10 @@ included. It refuses:
 - when that pane's shell or foreground processes carry a variable named in
   `hands_off_env`: another tool's processes, read from `/proc` (or `ps -E`)
   where the pane runs, as its identity. A process whose environment can't be
-  read is a refusal too: a hands-off rule fails closed. That is the
+  read is a refusal too: a hands-off rule fails closed. Without `/proc` (a
+  Mac), the environment is only what `ps -E` adds after the plain command, so
+  a marker in a process's arguments is not taken for one; a process `ps -E`
+  shows no environment for (another user's, or a system binary's) is refused. That is the
   environment each process started with: a variable a shell exported later isn't seen. Only a reused
   pane is checked; a new pane is bowery's own fresh shell.
 

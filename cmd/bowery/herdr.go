@@ -300,8 +300,14 @@ func setSound(pane, mode string) error {
 // paneIsBlankShell is true only when the pane provably sits at an idle shell
 // prompt: herdr says its foreground job is the shell itself and nothing else.
 func paneIsBlankShell(p Pane) bool {
+	blank, err := paneBlankShell(p)
+	return err == nil && blank
+}
+
+// paneBlankShell is paneIsBlankShell that says when it can't tell.
+func paneBlankShell(p Pane) (bool, error) {
 	if p.Agent != "" {
-		return false
+		return false, nil
 	}
 	var r struct {
 		ProcessInfo struct {
@@ -312,19 +318,19 @@ func paneIsBlankShell(p Pane) bool {
 			} `json:"foreground_processes"`
 		} `json:"process_info"`
 	}
-	if herdr(&r, "pane", "process-info", "--pane", p.PaneID) != nil {
-		return false
+	if err := herdr(&r, "pane", "process-info", "--pane", p.PaneID); err != nil {
+		return false, err
 	}
 	pi := r.ProcessInfo
 	if pi.ShellPID == 0 || pi.FgPGID != pi.ShellPID {
-		return false
+		return false, nil
 	}
 	for _, pr := range pi.Processes {
 		if pr.PID != pi.ShellPID {
-			return false
+			return false, nil
 		}
 	}
-	return true
+	return true, nil
 }
 
 func groupOf(ws Workspace, all []Workspace) []Workspace {

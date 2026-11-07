@@ -373,20 +373,30 @@ class Resume(Bed):
             with self.mutate() as s:
                 next(p for p in s["panes"] if p["pane_id"] == a["pane_id"])["pid"] = 1
             self.refused("can't read the environment of pid 1", "resume", "unread")
-        # Where ps -E stands in for /proc (a Mac), another user's process
-        # comes back as its command alone, exit 0: that's no read either.
+        # Where ps -E stands in for /proc (a Mac): the environment is what -E
+        # adds after the plain command, and nothing else counts. The pid has
+        # no /proc entry, so the shim is all there is to read.
         bin_ = self.t / "macps"
         bin_.mkdir()
-        (bin_ / "ps").write_text("#!/bin/sh\necho /sbin/launchd\n")
-        (bin_ / "ps").chmod(0o755)
+        shim = bin_ / "ps"
+        mac = {"PATH": f"{bin_}:{self.env['PATH']}"}
         with self.mutate() as s:
-            next(p for p in s["panes"] if p["pane_id"] == a["pane_id"])["pid"] = 1
-        self.refused("can't read the environment of pid 1", "resume", "unread",
-                     env={"PATH": f"{bin_}:{self.env['PATH']}"})
-        (bin_ / "ps").write_text("#!/bin/sh\necho /bin/zsh -l HOME=/home/x PATH=/usr/bin OTHER_TOOL_TAG=1\n")
-        if not os.access("/proc/1/environ", os.R_OK):
-            self.refused("carrying OTHER_TOOL_TAG", "resume", "unread", env={"PATH": f"{bin_}:{self.env['PATH']}"})
+            next(p for p in s["panes"] if p["pane_id"] == a["pane_id"])["pid"] = 4194301
+
+        def ps(command, environ):
+            shim.write_text('#!/bin/sh\ncase "$*" in *E*) echo "%s%s";; *) echo "%s";; esac\n'
+                            % (command, environ, command))
+            shim.chmod(0o755)
+
+        ps("/sbin/launchd", "")  # another user's: the command alone, exit 0
+        self.refused("can't read the environment of pid 4194301", "resume", "unread", env=mac)
+        ps("env HOME=/x OTHER_TOOL_TAG=1 tool", "")  # markers in the arguments are not an environment
+        self.refused("can't read the environment of pid 4194301", "resume", "unread", env=mac)
+        ps("tool --flag", " HOME=/home/x PATH=/usr/bin OTHER_TOOL_TAG=1")
+        self.refused("carrying OTHER_TOOL_TAG", "resume", "unread", env=mac)
         self.assertEqual(self.unchanged("unread"), snap)
+        ps("tool OTHER_TOOL_TAG=1", " HOME=/home/x PATH=/usr/bin")  # in argv only: readable, unmarked
+        self.ok("resume", "unread", env=mac)
 
     def test_a_failed_start_in_its_own_pane_types_nothing_into_what_it_left(self):
         a = self.dispatch("stuck", "--cwd", self.repo)

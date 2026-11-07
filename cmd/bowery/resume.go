@@ -322,15 +322,16 @@ func resumeOne(name string, o resumeOpts) error {
 // agent is closed, and a pane that was someone's own is left, with a warning.
 func undoReusedPane(rec *Record, pane string, cd bool, was string) {
 	p, err := paneGet(pane)
+	blank := false
 	if err == nil {
-		err = herdr(nil, "pane", "process-info", "--pane", pane)
+		blank, err = paneBlankShell(p)
 	}
 	if err != nil {
 		// Can't tell what is in it: close nothing, type nothing.
 		warn("could not look at %s after the failed start (%v); left as it is, look at it", pane, herdrMsg(err))
 		return
 	}
-	busy := !paneIsBlankShell(p)
+	busy := !blank
 	if ags, err := agents(); err == nil {
 		for _, a := range ags {
 			busy = busy || a.PaneID == pane
@@ -503,10 +504,11 @@ func procEnv(pid int) (string, error) {
 	// Anything it can't read is an error, not "no marker": refusing is the
 	// safe side of a hands-off rule.
 	script := fmt.Sprintf(`if [ -r /proc/%[1]d/environ ]; then tr '\0' '\n' < /proc/%[1]d/environ; `+
-		// ps -E prints another uid's command without its environment, and
-		// still exits 0: only output that holds one counts as a read.
-		`elif o=$(ps -wwE -o command= -p %[1]d 2>/dev/null) && case "$o" in *" PATH="*|*" HOME="*) true;; *) false;; esac; `+
-		`then printf '%%s\n' "$o"; `+
+		// ps -E prints another uid's process as its command alone, exit 0.
+		// So the environment is what -E adds after the plain command, and
+		// only that suffix is searched: a marker in the arguments is not one.
+		`elif c=$(ps -ww -o command= -p %[1]d 2>/dev/null) && e=$(ps -wwE -o command= -p %[1]d 2>/dev/null) `+
+		`&& [ "${#e}" -gt "${#c}" ] && [ "${e#"$c"}" != "$e" ]; then printf '%%s\n' "${e#"$c"}"; `+
 		`else echo "can't read the environment of pid %[1]d" >&2; exit 3; fi`, pid)
 	if machine != "" {
 		// As the identity: after `become` the pane's processes are theirs,
