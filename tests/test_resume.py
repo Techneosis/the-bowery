@@ -811,6 +811,34 @@ class Resume(Bed):
     def kill_by_tab(self, tab):
         self.herdr("tab", "close", tab)
 
+    # ------------------------------------------------------------ adopt a live seat
+
+    def test_adopt_gives_a_hand_started_agent_a_record_resume_can_use(self):
+        seat = self.launcher()
+        p = self.new_workspace("byhand", str(self.repo))
+        self.start_by_hand("handy", p["pane_id"])
+        sess = self.agent("handy")["session"]
+        self.refused("--gated (permission prompts on) or --ungated", "adopt", "handy", "--launcher", f"{seat} handy")
+        self.assertEqual(self.records("handy"), [], "nothing written")
+        self.refused("nothing to adopt", "adopt", "handy")
+        self.ok("adopt", "handy", "--launcher", f"{seat} handy", "--ungated")
+        rec = self.record("handy")
+        self.assertEqual((rec["session"], rec["cwd"], rec["launcher"]), (sess, str(self.repo), f"{seat} handy"))
+        self.assertNotIn("gated", rec, "ungated")
+        self.assertIsNotNone(self.agent("handy"), "nothing restarted")
+        self.exit_to_shell("handy")
+        self.resume("handy")
+        a = self.agent("handy")
+        self.assertEqual(a["env"].get("SEAT_BOX"), "box-handy", "back through the adopted launcher")
+        self.assertEqual(a["args"], ["--dangerously-skip-permissions", "--resume", sess])
+
+    def test_adopt_sets_a_launcher_on_an_existing_record(self):
+        seat = self.launcher()
+        self.dispatch("plainrec", "--cwd", self.repo)
+        self.ok("adopt", "plainrec", "--launcher", f"{seat} plainrec")
+        self.assertEqual(self.record("plainrec")["launcher"], f"{seat} plainrec")
+        self.refused("not the option", "adopt", "plainrec", "--launcher", "--gated")
+
     # ------------------------------------------------------------ orphans and list
 
     def test_orphans_shows_an_agent_that_quit_to_its_shell(self):

@@ -189,7 +189,7 @@ bowery dispatch <name> [placement] [options] [-- <prompt>]
 
 bowery done <name|pane|path>...   bring them home  [--force] [--keep-worktree] [--keep-branch] [--dry-run] [--machine L]
 bowery resume <name> [--swarm|--workspace] [--gated|--ungated] [--launcher CMD|--no-launcher] [--fresh] [--if-dead] [--not-within DUR] [--json] [--dry-run] [-- <prompt>]   bring a dead one back
-bowery adopt <name> <path>...     record more worktrees as the agent's
+bowery adopt <name> [<path>...] [--launcher CMD] [--gated|--ungated]   more worktrees, or a record for an agent started by hand
 bowery orphans [--machine L] [--json]   what done would clean up
 bowery list [--machine L]         agents, quiet or loud, who can be resumed, and how many strays
 bowery mute|unmute <name|pane>... set or clear the sound=off tag

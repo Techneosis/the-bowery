@@ -115,7 +115,11 @@ other commands
                            prints one line whatever happens, with an
                            "outcome": resumed, started_fresh, alive, busy,
                            too_soon, dry_run, refused or failed.
-  adopt <name> <path>...   record more worktrees as <name>'s
+  adopt <name> [<path>...] [--launcher CMD] [--gated|--ungated]
+                           record more worktrees as <name>'s; or give a live
+                           agent started by hand a record resume can use (its
+                           session and folder, plus the launcher and the
+                           permission mode it was started with)
   orphans [--machine L] [--json]
                            what done would clean up (and which dead agents
                            resume can bring back), on every server with a

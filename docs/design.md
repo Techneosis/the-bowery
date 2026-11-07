@@ -261,6 +261,13 @@ start herdr didn't name) is offered by `list` and `orphans` as
 `bowery resume <name> --fresh`, and with `--gated|--ungated` when it's too old
 to say how it was started.
 
+**A record for an agent started by hand:** `adopt <name> --launcher CMD
+--ungated` (or `--gated`) gives a live agent with no record one that `resume`
+can use: its session from herdr, its folder from its pane, and the launcher
+and permission mode given, since bowery can't see how a hand-started claude
+was launched (so one of `--gated`/`--ungated` is required). Nothing restarts.
+On an existing record, `--launcher` sets or changes its launcher.
+
 Only a record makes an agent resumable: an agent bowery didn't dispatch (a
 pane another tool started) has none, and is out of reach.
 

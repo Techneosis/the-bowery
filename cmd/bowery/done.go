@@ -638,15 +638,47 @@ func cmdDone(argv []string) {
 	os.Exit(rc)
 }
 
+const adoptUsage = "adopt <name> [<worktree-path>...] [--launcher CMD] [--gated|--ungated] [--machine LABEL]"
+
 func cmdAdopt(argv []string) {
 	explicit, argv := popMachine(argv)
-	if len(argv) < 2 {
-		die("adopt: usage: adopt <name> <worktree-path>... [--machine LABEL]")
+	var name, launcher, gated string
+	var paths []string
+	for i := 0; i < len(argv); i++ {
+		switch a := argv[i]; {
+		case a == "--launcher" || strings.HasPrefix(a, "--launcher="):
+			v, used := launcherArg(argv, i)
+			launcher, i = v, i+used
+		case a == "--gated" || a == "--ungated":
+			if gated != "" && gated != a[2:] {
+				die("adopt: --gated and --ungated contradict each other")
+			}
+			gated = a[2:]
+		case strings.HasPrefix(a, "-"):
+			die("adopt: unknown option %s (%s)", a, adoptUsage)
+		case name == "":
+			name = a
+		default:
+			paths = append(paths, a)
+		}
 	}
-	name, paths := argv[0], argv[1:]
+	if name == "" {
+		die("adopt: which agent? (%s)", adoptUsage)
+	}
+	if len(paths) == 0 && launcher == "" && gated == "" {
+		die("adopt: nothing to adopt: give worktree paths, --launcher or --gated|--ungated (%s)", adoptUsage)
+	}
 	if err := pickMachine(name, explicit); err != nil {
 		die("adopt: %v", herdrMsg(err))
 	}
+	unlock, held, err := nameLock(name)
+	if err != nil {
+		die("adopt: %v", err)
+	}
+	if held {
+		die("adopt %s: refused, nothing changed: a resume or dispatch of %s is running", name, name)
+	}
+	defer unlock()
 	rec := loadRecord(name)
 	if rec == nil {
 		ags, err := agents()
@@ -673,6 +705,20 @@ func cmdAdopt(argv []string) {
 		sock := socketPath()
 		rec = &Record{Name: name, Socket: &sock, Placement: "adopted", Kind: a.Kind, Started: nowISO(),
 			PaneID: p.PaneID, TerminalID: p.TerminalID, WorkspaceID: p.WorkspaceID, TabID: p.TabID, Sound: snd}
+		if (a.Kind == "" || a.Kind == "claude") && (gated != "" || launcher != "") {
+			// What resume needs to bring it back: its conversation, the folder
+			// claude filed it under, and how it was started, which bowery
+			// can't see in a claude started by hand. (Adopting worktrees alone
+			// records none of that, as before: resume then asks.)
+			if gated == "" {
+				die("adopt %s: say how it was started: --gated (permission prompts on) or --ungated", name)
+			}
+			rec.Session = a.SessionID()
+			rec.Cwd = p.Cwd
+			if rec.Cwd == "" {
+				rec.Cwd = a.Cwd
+			}
+		}
 		if machine != "" {
 			r, err := remote()
 			if err != nil {
@@ -680,6 +726,17 @@ func cmdAdopt(argv []string) {
 			}
 			rec.Socket, rec.Machine, rec.Host, rec.As = nil, machine, r.host, as
 		}
+	}
+	if launcher != "" {
+		if rec.Kind != "" && rec.Kind != "claude" {
+			die("adopt: --launcher is only for claude agents (%s is %s)", name, rec.Kind)
+		}
+		rec.Launcher = launcher
+		say("%s: launcher %s", name, launcher)
+	}
+	if gated != "" {
+		rec.Gated = gated == "gated"
+		say("%s: %s", name, map[bool]string{true: "gated (permission prompts on)", false: "ungated"}[rec.Gated])
 	}
 	have := recWorktrees(rec)
 	for _, path := range paths {

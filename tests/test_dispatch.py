@@ -447,7 +447,7 @@ class SecondWorktrees(Bed):
         self.assertEqual(rec["sound"], "on")
         self.refused("no dispatch record and no live agent named ghost", "adopt", "ghost", w)
         self.refused("is not a linked git worktree", "adopt", "manual", self.repo)
-        self.refused("usage: adopt", "adopt", "manual")
+        self.refused("nothing to adopt", "adopt", "manual")
 
     def test_a_worktree_nobody_claims_is_an_orphan_and_done_path_removes_it(self):
         w4 = self.linked("feat-four", "feat/four")
