@@ -2,11 +2,13 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"syscall"
 
 	"github.com/BurntSushi/toml"
 )
@@ -113,14 +115,37 @@ func herdrWorktreeDir(text, homeDir string) string {
 	return d
 }
 
-func sshRun(host, script string) (int, string, error) {
-	rt := os.Getenv("XDG_RUNTIME_DIR")
-	if rt == "" {
-		rt = os.TempDir()
+// controlDir is where ssh's control sockets go: a short, private
+// directory. A Unix socket's path is capped (104 bytes on macOS, 108 on
+// Linux), and $TMPDIR can be long enough on its own to pass it, so it's
+// $XDG_RUNTIME_DIR when that's short, else /tmp/bowery-<uid>, made 0700 and
+// checked to be ours. "" means none is safe: ssh then runs without sharing.
+func controlDir() string {
+	if rt := os.Getenv("XDG_RUNTIME_DIR"); rt != "" && len(rt) <= 50 {
+		return rt
 	}
-	ctl := filepath.Join(rt, "bowery-ssh-%C")
-	cmd := exec.Command("ssh", "-o", "BatchMode=yes", "-o", "ControlMaster=auto", "-o", "ControlPath="+ctl,
-		"-o", "ControlPersist=60", host, script)
+	d := fmt.Sprintf("/tmp/bowery-%d", os.Getuid())
+	if err := os.Mkdir(d, 0o700); err != nil && !os.IsExist(err) {
+		return ""
+	}
+	st, err := os.Lstat(d)
+	if err != nil || !st.IsDir() || st.Mode().Perm() != 0o700 {
+		return ""
+	}
+	if sys, ok := st.Sys().(*syscall.Stat_t); !ok || int(sys.Uid) != os.Getuid() {
+		return "" // someone else's: never put our sockets there
+	}
+	return d
+}
+
+func sshRun(host, script string) (int, string, error) {
+	args := []string{"-o", "BatchMode=yes"}
+	if d := controlDir(); d != "" {
+		// %C is a 40-hex hash of the connection, so the path stays short.
+		args = append(args, "-o", "ControlMaster=auto", "-o", "ControlPath="+filepath.Join(d, "bowery-ssh-%C"),
+			"-o", "ControlPersist=60")
+	}
+	cmd := exec.Command("ssh", append(args, host, script)...)
 	var stdout, stderr strings.Builder
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err := cmd.Run()
