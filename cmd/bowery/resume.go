@@ -257,8 +257,8 @@ func resumeOne(name string, o resumeOpts) error {
 	pane, err := startAgent(name, so, from, cwd, agentArgs, scratch, &also, m)
 	if err != nil {
 		undoStart(m)
-		if cd && cur.Cwd != "" {
-			_ = herdr(nil, "pane", "run", l.pane, "cd "+shq(cur.Cwd)) // put the shell back where it was
+		if l.placement == "pane" {
+			undoReusedPane(rec, l.pane, cd, cur.Cwd)
 		}
 		return err
 	}
@@ -314,6 +314,36 @@ func resumeOne(name string, o resumeOpts) error {
 	}
 	fmt.Println(jsonLine(out))
 	return nil
+}
+
+// undoReusedPane takes back a failed start in the agent's own reused pane.
+// Back at a bare shell, its directory is put back; anything else there (a
+// claude that half started) is never typed into: a pane bowery made for the
+// agent is closed, and a pane that was someone's own is left, with a warning.
+func undoReusedPane(rec *Record, pane string, cd bool, was string) {
+	p, err := paneGet(pane)
+	if err != nil {
+		warn("could not look at %s after the failed start: %v", pane, herdrMsg(err))
+		return
+	}
+	busy := !paneIsBlankShell(p)
+	if ags, err := agents(); err == nil {
+		for _, a := range ags {
+			busy = busy || a.PaneID == pane
+		}
+	}
+	switch {
+	case !busy:
+		if cd && was != "" {
+			_ = herdr(nil, "pane", "run", pane, "cd "+shq(was)) // put the shell back where it was
+		}
+	case rec.CreatedPane:
+		if _, err := safeClosePane(pane, false); err != nil {
+			warn("left %s open, with what the failed start left in it: %v", pane, err)
+		}
+	default:
+		warn("the failed start may have left claude running in %s, which isn't bowery's to close; look at it", pane)
+	}
 }
 
 // identityStill refuses when the record's --as and today's config disagree:
@@ -464,9 +494,13 @@ func handsOff(pane string) (string, error) {
 }
 
 // procEnv is a process's environment, as text, on the current server. A
-// process that is gone or not ours to read has none.
+// process that is gone or can't be read is an error.
 func procEnv(pid int) (string, error) {
-	script := fmt.Sprintf(`if [ -r /proc/%[1]d/environ ]; then tr '\0' '\n' < /proc/%[1]d/environ; else ps -wwE -o command= -p %[1]d 2>/dev/null; fi; true`, pid)
+	// Anything it can't read is an error, not "no marker": refusing is the
+	// safe side of a hands-off rule.
+	script := fmt.Sprintf(`if [ -r /proc/%[1]d/environ ]; then tr '\0' '\n' < /proc/%[1]d/environ; `+
+		`elif ps -wwE -o command= -p %[1]d 2>/dev/null; then :; `+
+		`else echo "can't read the environment of pid %[1]d" >&2; exit 3; fi`, pid)
 	if machine != "" {
 		// As the identity: after `become` the pane's processes are theirs,
 		// and only they (or root) can read their environment.
@@ -475,7 +509,8 @@ func procEnv(pid int) (string, error) {
 			return "", err
 		}
 		if rc != 0 {
-			return "", fail("reading the environment of pid %d on %s: %s", pid, machine, strings.TrimSpace(out))
+			return "", refuse("can't read the environment of pid %d on %s (%s), so can't tell whether it carries a hands_off_env marker",
+				pid, machine, strings.TrimSpace(out))
 		}
 		return out, nil
 	}
@@ -486,7 +521,13 @@ func procEnv(pid int) (string, error) {
 	if as != "" && cfg.IdentityCommand != "" {
 		cmd = exec.Command(expandUser(cfg.IdentityCommand), as, "sh", "-c", script)
 	}
-	out, _ := cmd.Output()
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return "", refuse("can't read the environment of pid %d (%s), so can't tell whether it carries a hands_off_env marker",
+			pid, strings.TrimSpace(stderr.String()))
+	}
 	return string(out), nil
 }
 

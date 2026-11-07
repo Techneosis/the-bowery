@@ -359,6 +359,28 @@ class Resume(Bed):
         out = self.resume("nb")
         self.assertEqual(out["tab_id"], a["tab_id"], "a fresh pane of its own, in its own tab")
 
+    def test_an_environment_it_cannot_read_is_refused(self):
+        self.config.write_text('hands_off_env = ["OTHER_TOOL_TAG"]\n')
+        a = self.dispatch("unread", "--cwd", self.repo)
+        self.exit_to_shell("unread")
+        with self.mutate() as s:  # a pid that isn't there (or isn't ours to read)
+            next(p for p in s["panes"] if p["pane_id"] == a["pane_id"])["pid"] = 4194301
+        snap = self.unchanged("unread")
+        self.refused("can't read the environment of pid 4194301", "resume", "unread")
+        self.assertEqual(self.unchanged("unread"), snap)
+
+    def test_a_failed_start_in_its_own_pane_types_nothing_into_what_it_left(self):
+        a = self.dispatch("stuck", "--cwd", self.repo)
+        self.exit_to_shell("stuck")
+        with self.mutate() as s:
+            s["trusted"] = []  # the folder is asked about again, and the answer won't take
+            next(p for p in s["panes"] if p["pane_id"] == a["pane_id"])["cwd"] = str(self.t)
+        rc, out = self.bowery("resume", "stuck", "--timeout", "500", env={"FAKE_TRUST_STUCK": "1"})
+        self.assertNotEqual(rc, 0, out)
+        log = self.state_of()["log"]
+        self.assertNotIn(["pane", "run", a["pane_id"], f"cd {self.t}"], log, "no cd typed into a half-started claude")
+        self.assertIsNone(self.pane(a["pane_id"]), "bowery's own pane, closed with what was left in it")
+
     def test_a_bad_hands_off_name_is_a_config_error(self):
         self.config.write_text('hands_off_env = [""]\n')
         self.refused("not an environment variable name", "config")

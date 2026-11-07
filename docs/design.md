@@ -161,8 +161,9 @@ included. It refuses:
   prompt;
 - when that pane's shell or foreground processes carry a variable named in
   `hands_off_env`: another tool's processes, read from `/proc` (or `ps -E`)
-  where the pane runs, as its identity. That is the environment each process
-  started with: a variable a shell exported later isn't seen. Only a reused
+  where the pane runs, as its identity. A process whose environment can't be
+  read is a refusal too: a hands-off rule fails closed. That is the
+  environment each process started with: a variable a shell exported later isn't seen. Only a reused
   pane is checked; a new pane is bowery's own fresh shell.
 
 Where it lands: the agent's own terminal if it is still open at a shell (the
@@ -180,8 +181,9 @@ workspace its `placement` and `owns` too, so `done` brings it home as usual;
 The record is written as soon as the agent is up, before its sound tag and
 the notice, so a failure after that leaves a record that points at the
 running agent (and says so) rather than at the pane it left. A start that
-fails takes back what it made, and a reused pane's shell is moved back to
-where it was.
+fails takes back what it made. A reused pane back at a bare shell is moved
+back to where it was; one with something left running in it is never typed
+into: closed if bowery made it, else left with a warning.
 
 Only a record makes an agent resumable: an agent bowery didn't dispatch (a
 pane another tool started) has none, and is out of reach.
