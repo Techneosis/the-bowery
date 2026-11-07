@@ -13,7 +13,7 @@ and needs none of this.
 
 ```bash
 bowery dispatch <name> [placement] [--worktree BRANCH [--base REF]] [--cwd DIR]
-                [--also-worktree PATH]... [--loud] [--gated] [--model MODEL]
+                [--also-worktree PATH]... [--loud] [--gated] [--model MODEL] [--launcher CMD]
                 [--machine LABEL [--as WHO]] [--wait] [-- <prompt>]
 bowery done <name>        # when its result is collected
 ```
@@ -73,6 +73,13 @@ way.
 claude understands (`opus`, `sonnet`, `haiku`), passed through as written
 unless the user's config maps it (`[models]`). Omit it and the agent uses its
 own default. Only valid with `--kind claude` (the default).
+
+`--launcher '<command>'` starts claude through a wrapper of the user's, when
+the agent must be started with an environment of its own (a seat launcher,
+say). The command runs in the pane's shell with claude's arguments after it,
+and must `exec claude "$@"`. It's recorded, so `bowery resume` uses it again;
+`bowery resume <name> --launcher '<command>'` adds one to an agent that had
+none.
 
 ## Sound: why the tag matters
 
@@ -161,7 +168,7 @@ or it was closed by mistake, its work is half done and its conversation is
 the only record of how far it got. Bring it back instead of starting over:
 
 ```bash
-bowery resume <name> [--dry-run] [--gated|--ungated] [-- <what to do next>]
+bowery resume <name> [--dry-run] [--gated|--ungated] [--launcher CMD|--no-launcher] [-- <what to do next>]
 ```
 
 It starts the agent again in the same worktree, machine and `--as` identity,

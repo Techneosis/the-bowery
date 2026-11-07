@@ -15,6 +15,7 @@ const trustText = "trust this folder"
 
 type startOpts struct {
 	placement, dir, pane, from, cwd, sound, kind, model, timeout string
+	launcher                                                     string
 	gated, wait                                                  bool
 	branch, base                                                 string
 	also, prompt                                                 []string
@@ -25,7 +26,7 @@ func parseStart(argv []string) startOpts {
 	o := startOpts{placement: "swarm", dir: "right", sound: "off", kind: "claude", timeout: "60000"}
 	valued := map[string]*string{
 		"--pane": &o.pane, "--from": &o.from, "--cwd": &o.cwd, "--kind": &o.kind, "--model": &o.model,
-		"--timeout": &o.timeout, "--worktree": &o.branch, "--base": &o.base, "--machine": &o.machine, "--as": &o.as,
+		"--timeout": &o.timeout, "--launcher": &o.launcher, "--worktree": &o.branch, "--base": &o.base, "--machine": &o.machine, "--as": &o.as,
 	}
 	for i := 0; i < len(argv); i++ {
 		a := argv[i]
@@ -174,6 +175,14 @@ func cmdDispatch(argv []string) {
 	if o.kind == "claude" && !o.gated {
 		extra = append(extra, "--dangerously-skip-permissions")
 	}
+	if o.launcher != "" {
+		if o.kind != "claude" {
+			die("--launcher is only supported with --kind claude (got kind=%s)", o.kind)
+		}
+		if strings.TrimSpace(o.launcher) == "" || strings.ContainsAny(o.launcher, "\n\r") {
+			die("--launcher takes one shell command line")
+		}
+	}
 	if o.model != "" {
 		if o.kind != "claude" {
 			die("--model is only supported with --kind claude (got kind=%s)", o.kind)
@@ -209,7 +218,7 @@ func cmdDispatch(argv []string) {
 
 	sock := socketPath()
 	rec := &Record{Name: name, Socket: &sock, Placement: o.placement, Kind: o.kind, Started: nowISO(),
-		Gated: o.gated, Model: o.model}
+		Gated: o.gated, Model: o.model, Launcher: o.launcher}
 	here, _ := os.Getwd() // default cwd for a new pane
 	if machine != "" {
 		r, _ := remote()
@@ -420,6 +429,9 @@ func startAgent(name string, o startOpts, from, here string, agentArgs []string,
 	// with agent_pane_busy until then. Retry that one error only.
 	timeoutMS := 60000
 	fmt.Sscan(o.timeout, &timeoutMS)
+	if o.launcher != "" {
+		return pane, launchAgent(name, pane, o.launcher, agentArgs, timeoutMS)
+	}
 	for attempt := 1; ; attempt++ {
 		err := herdr(nil, append([]string{"agent", "start", name, "--kind", o.kind, "--pane", pane, "--timeout", o.timeout}, agentArgs...)...)
 		if err == nil {
@@ -455,6 +467,97 @@ func startAgent(name string, o startOpts, from, here string, agentArgs []string,
 		}
 		return "", fail("agent start failed in %s: %s", pane, he.Raw)
 	}
+}
+
+// launchAgent starts the agent through a launcher instead of `herdr agent
+// start`, which only runs claude's own executable: `<launcher> <claude
+// args>` is run in the pane's shell, and the launcher must exec claude (a
+// wrapper that sets up its environment, say). bowery then waits for herdr to
+// see a claude agent in that pane, names it, and answers the trust dialog as
+// a plain start does.
+func launchAgent(name, pane, launcher string, agentArgs []string, timeoutMS int) error {
+	args := agentArgs
+	if len(args) > 0 && args[0] == "--" {
+		args = args[1:]
+	}
+	deadline := time.Now().Add(time.Duration(timeoutMS) * time.Millisecond)
+	// A fresh pane's shell may not be up yet: wait for a bare prompt.
+	for {
+		p, err := paneGet(pane)
+		if err != nil {
+			return err
+		}
+		if paneIsBlankShell(p) {
+			break
+		}
+		if time.Now().After(deadline) {
+			return fail("launcher: %s never came to a shell prompt", pane)
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+	line := launcher
+	if len(args) > 0 {
+		line += " " + shJoin(args...)
+	}
+	if err := herdr(nil, "pane", "run", pane, line); err != nil {
+		return err
+	}
+	var got *Agent
+	for got == nil {
+		ags, err := agents()
+		if err != nil {
+			return err
+		}
+		for i := range ags {
+			if ags[i].PaneID == pane {
+				got = &ags[i]
+			}
+		}
+		if got != nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			out, _ := herdrText("pane", "read", pane)
+			return fail("the launcher didn't start claude in %s (it must exec claude): %s", pane, lastLines(out, 12))
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+	if got.Kind != "" && got.Kind != "claude" {
+		return fail("the launcher started a %s agent in %s, not claude", got.Kind, pane)
+	}
+	if got.Name != name {
+		if err := herdr(nil, "agent", "rename", pane, name); err != nil {
+			return err
+		}
+	}
+	if err := herdr(nil, "agent", "wait", name, "--until", "idle", "--until", "blocked", "--timeout", fmt.Sprint(timeoutMS)); err != nil {
+		return err
+	}
+	screen, err := herdrText("agent", "read", name)
+	if err != nil || !strings.Contains(screen, trustText) {
+		return err
+	}
+	ok, _, err := acceptTrustDialog(name, pane, timeoutMS)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fail("the launched agent in %s is stuck at the folder-trust dialog", pane)
+	}
+	return nil
+}
+
+func lastLines(s string, n int) string {
+	var lines []string
+	for _, l := range strings.Split(s, "\n") {
+		if strings.TrimSpace(l) != "" {
+			lines = append(lines, l)
+		}
+	}
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	return strings.Join(lines, "\n")
 }
 
 // acceptTrustDialog answers Claude's folder-trust dialog Yes, when that is

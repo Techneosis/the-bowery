@@ -182,11 +182,12 @@ bowery dispatch <name> [placement] [options] [-- <prompt>]
     --gated                  keep permission prompts on (default: bypassed, as an
                              unwatched pane would wedge on one)
     --kind <KIND>            agent kind (default claude); --model <MODEL>
+    --launcher <CMD>         start claude through a wrapper that execs it (recorded; resume reuses it)
     --timeout <MS>           readiness timeout (default 60000)
     --wait                   block until the agent settles after its prompt
 
 bowery done <name|pane|path>...   bring them home  [--force] [--keep-worktree] [--keep-branch] [--dry-run] [--machine L]
-bowery resume <name> [--swarm|--workspace] [--gated|--ungated] [--dry-run] [-- <prompt>]   bring a dead one back
+bowery resume <name> [--swarm|--workspace] [--gated|--ungated] [--launcher CMD|--no-launcher] [--dry-run] [-- <prompt>]   bring a dead one back
 bowery adopt <name> <path>...     record more worktrees as the agent's
 bowery orphans [--machine L] [--json]   what done would clean up
 bowery list [--machine L]         agents, quiet or loud, who can be resumed, and how many strays

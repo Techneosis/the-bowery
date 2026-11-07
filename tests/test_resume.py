@@ -414,6 +414,60 @@ class Resume(Bed):
         self.config.write_text('hands_off_env = [""]\n')
         self.refused("not an environment variable name", "config")
 
+    # ------------------------------------------------------------ a launcher
+
+    def launcher(self, name="seat-launch", body='export SEAT_BOX=box-"$1"; shift; exec claude "$@"'):
+        f = self.t / name
+        f.write_text("#!/bin/bash\n" + body + "\n")
+        f.chmod(0o755)
+        return f
+
+    def test_a_launcher_starts_the_agent_and_resume_reuses_it(self):
+        seat = self.launcher()
+        out = self.dispatch("seated", "--cwd", self.repo, "--launcher", f"{seat} seated", "--", "hello")
+        a = self.agent("seated")
+        self.assertEqual(a["pane_id"], out["pane_id"], "named, in the pane bowery made")
+        self.assertEqual(a["env"].get("SEAT_BOX"), "box-seated", "started through the launcher")
+        self.assertEqual(a["args"], ["--dangerously-skip-permissions"])
+        self.assertEqual([p["text"] for p in a["prompts"]], ["hello"])
+        rec = self.record("seated")
+        self.assertEqual(rec["launcher"], f"{seat} seated")
+        self.assertEqual(rec["session"], a["session"])
+
+        self.kill("seated")
+        self.resume("seated")
+        a = self.agent("seated")
+        self.assertEqual(a["env"].get("SEAT_BOX"), "box-seated", "the record's launcher, again")
+        self.assertEqual(a["args"], ["--dangerously-skip-permissions", "--resume", rec["session"]])
+        self.assertTrue(a["prompts"][0]["text"].startswith(NOTICE))
+
+    def test_resume_can_add_or_drop_a_launcher(self):
+        seat = self.launcher()
+        self.dispatch("later", "--cwd", self.repo)
+        self.kill("later")
+        self.assertIn(f"through {seat} later", self.ok("resume", "later", "--launcher", f"{seat} later", "--dry-run"))
+        self.resume("later", "--launcher", f"{seat} later")
+        self.assertEqual(self.agent("later")["env"].get("SEAT_BOX"), "box-later")
+        self.assertEqual(self.record("later")["launcher"], f"{seat} later")
+        self.kill("later")
+        self.resume("later", "--no-launcher")
+        self.assertNotIn("SEAT_BOX", self.agent("later")["env"])
+        self.assertNotIn("launcher", self.record("later"))
+        self.refused("contradict", "resume", "later", "--launcher", "x", "--no-launcher")
+
+    def test_a_launcher_that_does_not_start_claude_leaves_nothing(self):
+        bad = self.launcher("not-claude", "echo hello from the launcher")
+        rc, out = self.bowery("dispatch", "nope", "--cwd", self.repo, "--launcher", str(bad), "--timeout", "1500")
+        self.assertNotEqual(rc, 0, out)
+        self.assertIn("must exec claude", out)
+        self.assertIn("hello from the launcher", out)
+        self.assertIsNone(self.agent("nope"))
+        self.assertEqual(self.records("nope"), [])
+        self.assertIsNone(self.swarm(), "the tab it made is taken back")
+
+    def test_a_launcher_needs_claude(self):
+        self.refused("only supported with --kind claude", "dispatch", "cx2", "--kind", "codex", "--launcher", "x")
+
     # ------------------------------------------------------------ orphans and list
 
     def test_orphans_shows_an_agent_that_quit_to_its_shell(self):

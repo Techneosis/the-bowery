@@ -19,12 +19,14 @@ const resumeNotice = "You were resumed: check what you already did before redoin
 type resumeOpts struct {
 	placement, timeout string
 	gated              string // "", "gated" or "ungated": overrides what the record says
+	launcher           string // overrides the record's launcher
+	noLauncher         bool   // start with herdr agent start, dropping the record's launcher
 	dryRun             bool
 	prompt             []string
 }
 
-const resumeUsage = "bowery resume <name> [--swarm|--workspace] [--gated|--ungated] [--machine LABEL] " +
-	"[--timeout MS] [--dry-run] [-- <prompt>]"
+const resumeUsage = "bowery resume <name> [--swarm|--workspace] [--gated|--ungated] [--launcher CMD|--no-launcher] " +
+	"[--machine LABEL] [--timeout MS] [--dry-run] [-- <prompt>]"
 
 func cmdResume(argv []string) {
 	// Everything after a literal -- is the prompt, flags and all.
@@ -52,6 +54,14 @@ func cmdResume(argv []string) {
 			o.gated = a[2:]
 		case "--dry-run":
 			o.dryRun = true
+		case "--launcher":
+			if i+1 >= len(argv) || strings.TrimSpace(argv[i+1]) == "" || strings.ContainsAny(argv[i+1], "\n\r") {
+				die("--launcher takes one shell command line")
+			}
+			o.launcher = argv[i+1]
+			i++
+		case "--no-launcher":
+			o.noLauncher = true
 		case "--timeout":
 			if i+1 >= len(argv) {
 				die("--timeout needs a value")
@@ -73,6 +83,9 @@ func cmdResume(argv []string) {
 	}
 	if name == "" {
 		die("resume: which agent? (%s)", resumeUsage)
+	}
+	if o.launcher != "" && o.noLauncher {
+		die("resume: --launcher and --no-launcher contradict each other")
 	}
 	if !nameRE.MatchString(name) {
 		die("agent name must be lowercase/digits/-/_ (got '%s')", name)
@@ -216,6 +229,13 @@ func resumeOne(name string, o resumeOpts) error {
 	}
 	agentArgs = append(agentArgs, "--resume", rec.Session)
 
+	launcher := rec.Launcher
+	switch {
+	case o.noLauncher:
+		launcher = ""
+	case o.launcher != "":
+		launcher = o.launcher
+	}
 	where := l.why
 	cd := l.placement == "pane" && norm(cur.Cwd) != norm(cwd)
 	if cd {
@@ -232,12 +252,16 @@ func resumeOne(name string, o resumeOpts) error {
 		if gated {
 			perm = "permission prompts on"
 		}
-		say("[dry-run] would resume %s (session %s, %s) in %s, %s, and send it the resume notice", name, rec.Session, perm, cwd, where)
+		via := ""
+		if launcher != "" {
+			via = ", through " + launcher
+		}
+		say("[dry-run] would resume %s (session %s, %s%s) in %s, %s, and send it the resume notice", name, rec.Session, perm, via, cwd, where)
 		return nil
 	}
 
 	// ---- start
-	so := startOpts{placement: l.placement, dir: "right", kind: "claude", timeout: o.timeout, cwd: cwd}
+	so := startOpts{placement: l.placement, dir: "right", kind: "claude", timeout: o.timeout, cwd: cwd, launcher: launcher}
 	from := ""
 	switch l.placement {
 	case "pane":
@@ -280,7 +304,7 @@ func resumeOne(name string, o resumeOpts) error {
 	if s := sessionIn(p.PaneID); s != "" {
 		rec.Session = s
 	}
-	rec.Cwd, rec.Gated = cwd, gated
+	rec.Cwd, rec.Gated, rec.Launcher = cwd, gated, launcher
 	rec.Resumed, rec.Resumes = nowISO(), rec.Resumes+1
 	if err := writeRecord(rec); err != nil {
 		return fail("%s is running again in %s, but its dispatch record could not be written: %v", name, p.PaneID, err)

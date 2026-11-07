@@ -61,6 +61,17 @@ either way (the flag is claude's). `--model` is passed through as written, or
 expanded through `[models]` in the config; bowery carries no table of model
 ids of its own to go stale.
 
+`--launcher <CMD>` starts claude through a command of the user's: a wrapper
+that sets up the agent's environment and then execs claude. `herdr agent
+start` only runs an agent kind's own executable, so with a launcher bowery
+runs `<CMD> <claude's arguments>` in the pane's shell itself, waits for herdr
+to see a claude agent in that pane, names it with `herdr agent rename`,
+answers the folder-trust dialog as a plain start does, and carries on (tag,
+record, prompt). A launcher that doesn't exec claude fails the start, with the
+pane's last lines, and what was made is taken back. The launcher is recorded,
+so `resume` starts the agent through it again; `resume --launcher CMD` sets
+one and `--no-launcher` drops it.
+
 ## Placement and ownership
 
 | placement | the pane | what the agent owns |

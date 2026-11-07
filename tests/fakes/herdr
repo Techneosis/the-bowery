@@ -15,6 +15,9 @@ What it models, because bowery's behaviour depends on it:
   and Down Enter answers it (a bare Enter quits the agent);
 - `pane close` on the last pane of a worktree group's primary closes the whole
   group, and `workspace close` refuses such a primary;
+- a launcher: `pane run` of a command that execs claude (tests/fakes/claude)
+  leaves an unnamed claude agent in the pane, with that claude's args and
+  environment, and `agent rename` names it;
 - each claude agent has a session id, reported as `agent_session` in
   `agent list` (herdr 0.9.5's shape); `-- --resume <id>` starts it on that
   session, otherwise it gets a new one;
@@ -282,6 +285,9 @@ def run(s, argv):
             pane_run(s, p, args[1])
             save(s)
             out(cid, {"type": "ok"})
+        if verb == "read":  # plain text, as the real one prints it
+            print("\n".join(p["output"]))
+            sys.exit(0)
         if verb == "wait-output":
             want = opt(args, "--match")
             for line in p["output"]:
@@ -329,7 +335,16 @@ def run(s, argv):
                 err(cid, "agent_not_ready", f"agent {name} did not become ready")
             save(s)
             out(cid, {"type": "agent_started", "agent": agent_view(s, a)})
-        a = s["agents"].get(name)
+        a = s["agents"].get(name) or next((x for x in s["agents"].values() if x["pane_id"] == name), None)
+        if a and verb == "rename":
+            key = next(k for k, x in s["agents"].items() if x is a)
+            if args[1] in s["agents"] and s["agents"][args[1]] is not a:
+                err(cid, "agent_name_taken", f"agent {args[1]} already exists")
+            del s["agents"][key]
+            a["name"] = args[1]
+            s["agents"][args[1]] = a
+            save(s)
+            out(cid, {"type": "agent_renamed", "agent": agent_view(s, a)})
         if not a:
             err(cid, "agent_not_found", f"agent {name} not found")
         if verb == "read":
@@ -341,7 +356,7 @@ def run(s, argv):
                     s["trusted"].append(pane(s, a["pane_id"])["cwd"])
                     a["agent_status"], a["screen"] = "idle", "> "
                 elif keys == ["Enter"]:
-                    del s["agents"][name]
+                    del s["agents"][next(k for k, x in s["agents"].items() if x is a)]
             save(s)
             out(cid, {"type": "ok"})
         if verb == "wait":
@@ -397,8 +412,21 @@ def pane_run(s, p, cmd):
             return
         p["env"] = dict(kv.split("=", 1) for kv in r.stdout.split("\0") if "=" in kv)
         return
-    r = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True, env={**server_env(), **p["env"]}, cwd=p["cwd"])
+    mark = os.path.join(DIR, "claude-mark-" + p["pane_id"].replace(":", "_"))
+    r = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True,
+                       env={**server_env(), **p["env"], "FAKE_CLAUDE_MARK": mark}, cwd=p["cwd"])
     p["output"].extend((r.stdout + r.stderr).splitlines())
+    if os.path.exists(mark):
+        # The command exec'd claude (a launcher): herdr now sees an unnamed
+        # claude agent in the pane, as it does for one started by hand.
+        m = json.load(open(mark))
+        os.remove(mark)
+        a = {"name": "", "pane_id": p["pane_id"], "agent": "claude", "agent_status": "idle", "args": m["args"],
+             "prompts": [], "env": m["env"], "screen": "> ", "cwd": p["cwd"], "pid": m["pid"],
+             "session": opt(m["args"], "--resume") or str(uuid.uuid4())}
+        if os.environ.get("FAKE_TRUST_DIALOG", "1") != "0" and not any(under(p["cwd"], t) for t in s["trusted"]):
+            a["agent_status"], a["screen"] = "blocked", TRUST
+        s["agents"]["~" + p["pane_id"]] = a
 
 
 # ------------------------------------------------------------------ main

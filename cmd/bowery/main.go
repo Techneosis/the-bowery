@@ -12,7 +12,8 @@ const usage = `bowery: send agents out into herdr, and bring them home with done
 
   bowery dispatch <name> [placement] [options] [-- <prompt>]
   bowery done <name|pane|worktree-path>... [--force] [--keep-worktree] [--keep-branch] [--dry-run]
-  bowery resume <name> [--swarm|--workspace] [--gated|--ungated] [--machine L] [--timeout MS] [--dry-run] [-- <prompt>]
+  bowery resume <name> [--swarm|--workspace] [--gated|--ungated] [--launcher CMD|--no-launcher]
+                [--machine L] [--timeout MS] [--dry-run] [-- <prompt>]
   bowery watch <config> [--poll 30s] [--max 45m]   (bowery watch --help)
 
 dispatch: make (or take) a pane, start the agent, tag it quiet, optionally
@@ -65,6 +66,10 @@ options
   --kind <KIND>            agent kind (default: claude)
   --model <MODEL>          model for a claude agent: an id or alias, passed
                            through (or expanded by [models] in the config)
+  --launcher <CMD>         start claude through CMD (run in the pane's shell
+                           with claude's arguments; it must exec claude),
+                           for a wrapper that sets up its environment.
+                           Recorded: resume reuses it
   --timeout <MS>           readiness timeout for agent start (default 60000)
   --wait                   after the prompt, block until the agent settles
 
@@ -86,7 +91,9 @@ other commands
                            (claude --resume), in its worktree, on its
                            machine, as its --as: in its own pane if that is
                            at a shell, else a new pane in its tab, else a new
-                           tab in swarm (--workspace for a workspace). Its
+                           tab in swarm (--workspace for a workspace),
+                           through its recorded --launcher (--launcher CMD
+                           sets one, --no-launcher drops it). Its
                            first message says it was resumed. Refuses,
                            changing nothing, while it or its session is
                            alive; without a session or directory in its

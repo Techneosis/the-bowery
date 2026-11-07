@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# A stand-in claude, for launchers: a launcher runs in the pane's shell and
+# execs claude. The fake herdr's `pane run` points FAKE_CLAUDE_MARK at a file;
+# this writes its arguments, environment and pid there, and herdr then sees a
+# claude agent in that pane. Anywhere else it does nothing.
+[[ -n ${FAKE_CLAUDE_MARK:-} ]] || exit 1
+python3 - "$FAKE_CLAUDE_MARK" "$$" "$@" <<'PY'
+import json, os, sys
+mark, pid, args = sys.argv[1], int(sys.argv[2]), sys.argv[3:]
+env = {k: v for k, v in os.environ.items() if k != "FAKE_CLAUDE_MARK"}
+json.dump({"args": args, "pid": pid, "env": env}, open(mark, "w"))
+PY

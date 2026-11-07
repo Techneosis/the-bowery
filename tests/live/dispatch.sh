@@ -329,7 +329,7 @@ has "says it is alive" "$out" "still alive"
 rstab="$(agent_field rs 'a["tab_id"]')"
 herdr tab close "$rstab" >/dev/null
 hasnt "the agent is gone" "$(agent_names)" "rs"
-has "orphans says it can be resumed" "$("$D" orphans 2>&1)" "(bowery resume rs)"
+has "orphans says it can be resumed" "$("$D" orphans 2>&1)" "(bowery resume rs; done ends that)"
 out="$("$D" resume rs -- "What word did I ask you to remember? Reply with just the word." 2>&1)"; rc=$?
 check "resume exits 0" test $rc -eq 0 || printf '%s\n' "$out"
 has "the agent is back under its name" "$(agent_names)" "rs"
@@ -341,6 +341,23 @@ has "and was told it was resumed" "$screen" "You were resumed"
 has "the record counts the resume" "$(cat "$BOWERY_STATE"/rs.*.json)" "\"resumes\": 1"
 "$D" done rs --force >/dev/null 2>&1
 hasnt "done brings it home" "$(agent_names)" "rs"
+
+echo "== --launcher: an agent started through a command that execs claude"
+printf '#!/bin/bash\nexport SEAT_BOX=box-"$1"; shift; exec claude "$@"\n' >"$TMP/seat"; chmod +x "$TMP/seat"
+start ln --cwd "$REPO" --launcher "$TMP/seat ln" --wait -- "Reply with just: ok." >/dev/null
+has "the launched agent is named" "$(agent_names)" "ln"
+lnpid() { herdr pane process-info --pane "$(agent_field ln 'a["pane_id"]')" | python3 -c 'import json,sys
+print([p["pid"] for p in json.load(sys.stdin)["result"]["process_info"]["foreground_processes"] if p["name"]=="claude"][0])'; }
+has "its claude has the launcher's environment" "$(tr '\0' '\n' </proc/"$(lnpid)"/environ)" "SEAT_BOX=box-ln"
+has "the record keeps the launcher" "$(cat "$BOWERY_STATE"/ln.*.json)" "\"launcher\": \"$TMP/seat ln\""
+herdr tab close "$(agent_field ln 'a["tab_id"]')" >/dev/null
+out="$("$D" resume ln 2>&1)"; rc=$?
+check "resume through the launcher exits 0" test $rc -eq 0 || printf '%s\n' "$out"
+has "back under its name" "$(agent_names)" "ln"
+has "through the launcher again" "$(tr '\0' '\n' </proc/"$(lnpid)"/environ)" "SEAT_BOX=box-ln"
+has "on its session" "$(tr '\0' ' ' </proc/"$(lnpid)"/cmdline)" "--resume"
+"$D" done ln --force >/dev/null 2>&1
+hasnt "done brings it home" "$(agent_names)" "ln"
 
 echo "== hazard: herdr-made worktree group; a sibling must survive every done"
 mk() { herdr worktree create --cwd "$REPO" --branch "$1" --base origin/main --path "$TMP/worktrees/repo/$1" --label "$1" --no-focus \

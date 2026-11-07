@@ -56,8 +56,11 @@ type Record struct {
 	Cwd     string `json:"cwd,omitempty"`
 	Gated   bool   `json:"gated,omitempty"`
 	Model   string `json:"model,omitempty"`
-	Resumed string `json:"resumed,omitempty"` // the last resume
-	Resumes int    `json:"resumes,omitempty"` // how many times
+	// Launcher, when set, starts the agent instead of `herdr agent start`:
+	// `<launcher> <claude args>` in the pane's shell, and it must exec claude.
+	Launcher string `json:"launcher,omitempty"`
+	Resumed  string `json:"resumed,omitempty"` // the last resume
+	Resumes  int    `json:"resumes,omitempty"` // how many times
 }
 
 func stateDir() string {
