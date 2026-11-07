@@ -322,8 +322,12 @@ func resumeOne(name string, o resumeOpts) error {
 // agent is closed, and a pane that was someone's own is left, with a warning.
 func undoReusedPane(rec *Record, pane string, cd bool, was string) {
 	p, err := paneGet(pane)
+	if err == nil {
+		err = herdr(nil, "pane", "process-info", "--pane", pane)
+	}
 	if err != nil {
-		warn("could not look at %s after the failed start: %v", pane, herdrMsg(err))
+		// Can't tell what is in it: close nothing, type nothing.
+		warn("could not look at %s after the failed start (%v); left as it is, look at it", pane, herdrMsg(err))
 		return
 	}
 	busy := !paneIsBlankShell(p)
@@ -339,7 +343,7 @@ func undoReusedPane(rec *Record, pane string, cd bool, was string) {
 		}
 	case rec.CreatedPane:
 		if _, err := safeClosePane(pane, false); err != nil {
-			warn("left %s open, with what the failed start left in it: %v", pane, err)
+			warn("could not close %s, which the failed start left something running in: %v", pane, err)
 		}
 	default:
 		warn("the failed start may have left claude running in %s, which isn't bowery's to close; look at it", pane)
@@ -499,7 +503,10 @@ func procEnv(pid int) (string, error) {
 	// Anything it can't read is an error, not "no marker": refusing is the
 	// safe side of a hands-off rule.
 	script := fmt.Sprintf(`if [ -r /proc/%[1]d/environ ]; then tr '\0' '\n' < /proc/%[1]d/environ; `+
-		`elif ps -wwE -o command= -p %[1]d 2>/dev/null; then :; `+
+		// ps -E prints another uid's command without its environment, and
+		// still exits 0: only output that holds one counts as a read.
+		`elif o=$(ps -wwE -o command= -p %[1]d 2>/dev/null) && case "$o" in *" PATH="*|*" HOME="*) true;; *) false;; esac; `+
+		`then printf '%%s\n' "$o"; `+
 		`else echo "can't read the environment of pid %[1]d" >&2; exit 3; fi`, pid)
 	if machine != "" {
 		// As the identity: after `become` the pane's processes are theirs,

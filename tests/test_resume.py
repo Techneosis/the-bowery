@@ -368,6 +368,25 @@ class Resume(Bed):
         snap = self.unchanged("unread")
         self.refused("can't read the environment of pid 4194301", "resume", "unread")
         self.assertEqual(self.unchanged("unread"), snap)
+        if os.getuid() != 0 and not os.access("/proc/1/environ", os.R_OK):
+            # A live process of another user (pid 1, root's): /proc won't say.
+            with self.mutate() as s:
+                next(p for p in s["panes"] if p["pane_id"] == a["pane_id"])["pid"] = 1
+            self.refused("can't read the environment of pid 1", "resume", "unread")
+        # Where ps -E stands in for /proc (a Mac), another user's process
+        # comes back as its command alone, exit 0: that's no read either.
+        bin_ = self.t / "macps"
+        bin_.mkdir()
+        (bin_ / "ps").write_text("#!/bin/sh\necho /sbin/launchd\n")
+        (bin_ / "ps").chmod(0o755)
+        with self.mutate() as s:
+            next(p for p in s["panes"] if p["pane_id"] == a["pane_id"])["pid"] = 1
+        self.refused("can't read the environment of pid 1", "resume", "unread",
+                     env={"PATH": f"{bin_}:{self.env['PATH']}"})
+        (bin_ / "ps").write_text("#!/bin/sh\necho /bin/zsh -l HOME=/home/x PATH=/usr/bin OTHER_TOOL_TAG=1\n")
+        if not os.access("/proc/1/environ", os.R_OK):
+            self.refused("carrying OTHER_TOOL_TAG", "resume", "unread", env={"PATH": f"{bin_}:{self.env['PATH']}"})
+        self.assertEqual(self.unchanged("unread"), snap)
 
     def test_a_failed_start_in_its_own_pane_types_nothing_into_what_it_left(self):
         a = self.dispatch("stuck", "--cwd", self.repo)
