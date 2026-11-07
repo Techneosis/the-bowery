@@ -296,18 +296,17 @@ class Resume(Bed):
         self.config.write_text('hands_off_env = ["SOMETHING_ELSE"]\n')
         self.ok("resume", "marked")
 
-    def test_a_failure_after_the_start_still_records_where_the_agent_is(self):
+    def test_a_first_prompt_that_never_arrives_takes_the_start_back(self):
         self.dispatch("late", "--cwd", self.repo)
         self.kill("late")
+        before = self.records("late")[0].read_text()
         rc, out = self.bowery("resume", "late", env={"FAKE_PROMPT_FAIL": "1"})
         self.assertNotEqual(rc, 0)
-        self.assertIn("is running again in", out)
-        a = self.agent("late")
-        rec = self.record("late")
-        self.assertEqual((rec["pane_id"], rec["terminal_id"]), (a["pane_id"], self.pane(a["pane_id"])["terminal_id"]))
-        self.assertEqual(rec["resumes"], 1)
-        self.ok("done", "late", "--force")
-        self.assertEqual(self.swarm(), None, "done owns the new tab: nothing left")
+        self.assertIn("first prompt didn't reach it", out)
+        self.assertIsNone(self.agent("late"), "a seat with no reason to be up isn't left idle")
+        self.assertIsNone(self.swarm(), "the tab it made is taken back")
+        self.assertEqual(self.records("late")[0].read_text(), before, "nothing recorded, so a retry isn't 'too soon'")
+        self.resume("late")
 
     def test_a_new_place_is_refused_while_the_old_one_is_open(self):
         a = self.dispatch("stay", "--cwd", self.repo)
@@ -600,7 +599,7 @@ class Resume(Bed):
         self.kill("fails")
         rc, _ = self.bowery("resume", "fails", env={"FAKE_PROMPT_FAIL": "1"})
         self.assertNotEqual(rc, 0)
-        self.kill("fails")
+        self.assertIsNone(self.agent("fails"), "taken back")
         self.resume("fails")
 
     def test_dispatch_wont_replace_a_record(self):
@@ -714,11 +713,20 @@ class Resume(Bed):
         with self.lock("js"):
             self.assertEqual(outcome("--if-dead")["outcome"], "busy")
         self.assertEqual(outcome("--not-within", "1h", rc=1)["outcome"], "refused")
-        # Up, but its first prompt failed: a warning on a started agent, not "failed".
-        got = outcome(env={"FAKE_PROMPT_FAIL": "1"})
-        self.assertEqual(got["outcome"], "resumed")
-        self.assertIn("first prompt didn't reach it", got["warning"])
-        self.assertIsNotNone(self.agent("js"))
+        # Its first prompt never arrived: taken back and "failed", for a retry.
+        got = outcome(env={"FAKE_PROMPT_FAIL": "1"}, rc=1)
+        self.assertEqual(got["outcome"], "failed")
+        self.assertIn("first prompt didn't reach it", got["why"])
+        self.assertIsNone(self.agent("js"))
+        # The name is the first word that isn't an option or its value.
+        rc, got = self.json_of("--json", "--not-within", "10m", "js", "--bogus")
+        self.assertEqual((got["name"], got["outcome"]), ("js", "refused"))
+        # A bad config still answers with one line.
+        self.config.write_text("this is = = not toml\n")
+        rc, got = self.json_of("js", "--json")
+        self.assertNotEqual(rc, 0)
+        self.assertEqual((got["name"], got["outcome"]), ("js", "refused"))
+        self.config.write_text("")
         # Usage errors still keep the promise.
         for bad in (["--frobnicate"], ["--not-within", "soon"], ["--swarm", "--workspace"], ["other-name"]):
             rc, got = self.json_of("js", "--json", *bad)
@@ -731,11 +739,12 @@ class Resume(Bed):
         self.dispatch("fr", "--cwd", self.repo)
         sess = self.record("fr")["session"]
         self.kill("fr")
-        self.refused("passes --resume itself", "resume", "fr", "--fresh", "--launcher", f"claude --resume {sess}")
         sneaky = self.launcher("sneaky", f'exec claude --resume {sess} "$@"')
-        rc, out = self.bowery("resume", "fr", "--fresh", "--launcher", str(sneaky))
-        self.assertNotEqual(rc, 0, out)
-        self.assertIn(f"came back on its old conversation {sess}", out)
+        rc, got = self.json_of("fr", "--fresh", "--json", "--launcher", str(sneaky))
+        self.assertNotEqual(rc, 0, got)
+        self.assertEqual(got["outcome"], "failed")
+        self.assertIn(f"came back on its old conversation {sess}", got["why"])
+        self.assertIn("taken back", got["why"])
         self.assertEqual(self.record("fr")["session"], sess, "the record keeps it")
         self.assertIsNone(self.agent("fr"))
 

@@ -156,6 +156,9 @@ func main() {
 		cmdUpgrade(check)
 		return
 	}
+	if cmd == "resume" {
+		resumeJSONScan(rest) // so a bad config still answers --json with one line
+	}
 	cfg = loadConfig()
 	switch cmd {
 	case "dispatch":
