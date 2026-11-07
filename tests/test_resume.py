@@ -226,7 +226,7 @@ class Resume(Bed):
         self.ok("orphans")
         self.assertNotIn("session", json.loads(f.read_text()), "nothing invented")
         out = json.loads(self.ok("orphans", "--json"))
-        self.assertEqual([o["resumable"] for o in out if o["name"] == "old"], [False])
+        self.assertEqual([o["resumable"] for o in out if o["name"] == "old"], [False], "no folder to start it in")
 
     def test_refused_when_its_worktree_is_gone(self):
         self.dispatch("wt", "--worktree", "wt", "--cwd", self.repo)
@@ -686,13 +686,21 @@ class Resume(Bed):
         self.kill("fseat")
         self.assertIn("nothing to do", self.ok("resume", "fseat", "--fresh", "--if-dead", "--not-within", "10m"))
 
-    def test_json_says_what_happened(self):
+    def json_of(self, *args, env=None):
+        """resume --json, stdout and stderr apart: -> (exit code, the one JSON object)."""
+        from _binary import BIN
+        p = subprocess.run([BIN, "resume", *map(str, args)], env={**self.env, **(env or {})}, cwd=self.t,
+                           capture_output=True, text=True, stdin=subprocess.DEVNULL)
+        lines = p.stdout.splitlines()
+        self.assertEqual(len(lines), 1, f"exactly one line on stdout, got {p.stdout!r} (stderr {p.stderr!r})")
+        return p.returncode, json.loads(lines[0])
+
+    def test_json_is_one_line_with_its_outcome_on_every_path(self):
         self.dispatch("js", "--cwd", self.repo)
-        def outcome(*args, ok=True):
-            rc, out = self.bowery("resume", "js", "--json", *args)
-            self.assertEqual(rc == 0, ok, out)
-            line = next(l for l in out.splitlines() if l.startswith("{"))
-            return json.loads(line)
+        def outcome(*args, rc=0, env=None):
+            got_rc, got = self.json_of("js", "--json", *args, env=env)
+            self.assertEqual(got_rc == 0, rc == 0, got)
+            return got
         self.assertEqual(outcome("--if-dead")["outcome"], "alive")
         self.kill("js")
         self.assertEqual(outcome("--dry-run")["outcome"], "dry_run")
@@ -705,8 +713,48 @@ class Resume(Bed):
         self.kill("js")
         with self.lock("js"):
             self.assertEqual(outcome("--if-dead")["outcome"], "busy")
-        refused = outcome("--swarm", "--not-within", "1h", ok=False)
-        self.assertEqual(refused["outcome"], "refused")
+        self.assertEqual(outcome("--not-within", "1h", rc=1)["outcome"], "refused")
+        # Up, but its first prompt failed: a warning on a started agent, not "failed".
+        got = outcome(env={"FAKE_PROMPT_FAIL": "1"})
+        self.assertEqual(got["outcome"], "resumed")
+        self.assertIn("first prompt didn't reach it", got["warning"])
+        self.assertIsNotNone(self.agent("js"))
+        # Usage errors still keep the promise.
+        for bad in (["--frobnicate"], ["--not-within", "soon"], ["--swarm", "--workspace"], ["other-name"]):
+            rc, got = self.json_of("js", "--json", *bad)
+            self.assertNotEqual(rc, 0)
+            self.assertEqual((got["outcome"], got["name"]), ("refused", "js"), bad)
+        rc, got = self.json_of("--json")
+        self.assertEqual(got["outcome"], "refused")
+
+    def test_fresh_refuses_a_launcher_that_resumes(self):
+        self.dispatch("fr", "--cwd", self.repo)
+        sess = self.record("fr")["session"]
+        self.kill("fr")
+        self.refused("passes --resume itself", "resume", "fr", "--fresh", "--launcher", f"claude --resume {sess}")
+        sneaky = self.launcher("sneaky", f'exec claude --resume {sess} "$@"')
+        rc, out = self.bowery("resume", "fr", "--fresh", "--launcher", str(sneaky))
+        self.assertNotEqual(rc, 0, out)
+        self.assertIn(f"came back on its old conversation {sess}", out)
+        self.assertEqual(self.record("fr")["session"], sess, "the record keeps it")
+        self.assertIsNone(self.agent("fr"))
+
+    def test_fresh_starts_an_old_record(self):
+        self.dispatch("ancient", "--cwd", self.repo)
+        f = self.records("ancient")[0]
+        rec = json.loads(f.read_text())
+        for k in ("session", "cwd", "gated", "model", "terminal_id", "owns"):
+            rec.pop(k, None)
+        rec["worktree"], rec["branch"] = str(self.repo), None
+        f.write_text(json.dumps(rec))
+        self.kill_by_tab(rec["tab_id"])
+        self.assertIn("bowery resume ancient --fresh --gated|--ungated", self.ok("orphans"))
+        self.refused("--fresh starts it in a new conversation", "resume", "ancient")
+        self.resume("ancient", "--fresh", "--ungated")
+        self.assertTrue(self.record("ancient")["session"])
+
+    def kill_by_tab(self, tab):
+        self.herdr("tab", "close", tab)
 
     # ------------------------------------------------------------ orphans and list
 

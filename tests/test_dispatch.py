@@ -469,7 +469,7 @@ class SecondWorktrees(Bed):
         rec = {"name": "gone", "placement": "swarm", "terminal_id": "term_dead", "worktree": str(self.wt / "repo" / "gone"),
                "branch": "gone", "repo": str(self.repo), "worktrees": []}
         (self.state / f"gone.{self.records_tag()}.json").write_text(json.dumps(rec))
-        self.assertIn("(dispatched to gone, now gone)", self.ok("orphans"))
+        self.assertIn("(dispatched to gone, now gone", self.ok("orphans"))
         self.ok("done", self.wt / "repo" / "gone")
         self.assertNotIn("worktree", self.record("gone"))
 

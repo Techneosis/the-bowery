@@ -169,7 +169,7 @@ func findOrphans() ([]orphan, error) {
 						warn("%s: can't tell whether it can be resumed: %v", owner, herdrMsg(rerr))
 					}
 					if ok {
-						note += fmt.Sprintf("; bowery resume %s can still use it, done ends that", owner)
+						note += fmt.Sprintf("; %s can still use it, done ends that", resumeCmd(r))
 						resOK, resN = true, r.Resumes
 					}
 				}
@@ -226,7 +226,7 @@ func findOrphans() ([]orphan, error) {
 		}
 		hint := ""
 		if res {
-			hint = "  (bowery resume " + name + "; done ends that)"
+			hint = "  (" + resumeCmd(r) + "; done ends that)"
 		}
 		rec := orphan{kind: "record", target: name, Name: name, Status: "gone", Repo: r.Repo, Branch: r.Branch,
 			Started: r.Started, Resumable: res, Resumes: r.Resumes}
@@ -425,7 +425,7 @@ func cmdList(argv []string) {
 					warn("%s: can't tell whether it can be resumed: %v", r.Name, herdrMsg(err))
 				}
 				if ok {
-					note := "bowery resume " + r.Name
+					note := resumeCmd(r)
 					if r.Resumes > 0 {
 						note += fmt.Sprintf("  (resumed %d time(s))", r.Resumes)
 					}

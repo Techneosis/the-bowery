@@ -50,6 +50,25 @@ func cmdResume(argv []string) {
 			break
 		}
 	}
+	// --json promises one line on stdout whatever happens, so it's known
+	// before anything can fail: a usage error, a panic.
+	for _, a := range argv {
+		if a == "--json" {
+			jsonOnce.on = true
+		}
+		if jsonOnce.name == "" && nameRE.MatchString(a) {
+			jsonOnce.name = a
+		}
+	}
+	if jsonOnce.on {
+		defer func() {
+			if r := recover(); r != nil {
+				emitJSON([]kv{{"name", jsonOnce.name}, {"outcome", "failed"}, {"why", fmt.Sprint(r)}})
+				fmt.Fprintf(os.Stderr, "bowery: resume: %v\n", r)
+				os.Exit(1)
+			}
+		}()
+	}
 	explicit, argv := popMachine(argv)
 	o := resumeOpts{timeout: "60000", prompt: prompt}
 	name := ""
@@ -121,6 +140,7 @@ func cmdResume(argv []string) {
 	if !nameRE.MatchString(name) {
 		die("agent name must be lowercase/digits/-/_ (got '%s')", name)
 	}
+	jsonOnce.name = name
 	if err := pickMachine(name, explicit); err != nil {
 		die("resume: %v", herdrMsg(err))
 	}
@@ -130,7 +150,7 @@ func cmdResume(argv []string) {
 	// --json: a caller reads what happened instead of parsing prose.
 	report := func(outcome, why string) {
 		if o.asJSON {
-			fmt.Println(jsonLine([]kv{{"name", name}, {"outcome", outcome}, {"why", why}}))
+			emitJSON([]kv{{"name", name}, {"outcome", outcome}, {"why", why}})
 		}
 	}
 	switch {
@@ -219,8 +239,8 @@ func resumeOne(name string, o resumeOpts) error {
 		}
 	}
 	if rec.Session == "" && !o.fresh {
-		return refuse("%s's record has no session id (dispatched by an older bowery, and never seen alive since); "+
-			"dispatch it again instead", name)
+		return refuse("%s's record has no session id to resume (an older dispatch never seen alive since, "+
+			"or a --fresh start herdr didn't name); bowery resume %s --fresh starts it in a new conversation", name, name)
 	}
 	for _, a := range ags {
 		if rec.Session != "" && a.SessionID() == rec.Session {
@@ -329,6 +349,13 @@ func resumeOne(name string, o resumeOpts) error {
 			return refuse("%s's recorded launcher %s; resume with --launcher CMD or --no-launcher", name, why)
 		}
 	}
+	if o.fresh && launcher != "" {
+		for _, w := range strings.Fields(launcher) {
+			if w == "--resume" || w == "-r" || w == "--continue" || w == "-c" || strings.HasPrefix(w, "--resume=") {
+				return refuse("%s's launcher passes %s itself, so --fresh can't start a new conversation through it", name, w)
+			}
+		}
+	}
 	where := l.why
 	cd := l.placement == "pane" && norm(cur.Cwd) != norm(cwd)
 	if cd {
@@ -350,7 +377,7 @@ func resumeOne(name string, o resumeOpts) error {
 			via = ", through " + launcher
 		}
 		if o.asJSON {
-			fmt.Println(jsonLine([]kv{{"name", name}, {"outcome", "dry_run"}, {"fresh", fmt.Sprint(o.fresh)}, {"where", where}}))
+			emitJSON([]kv{{"name", name}, {"outcome", "dry_run"}, {"fresh", fmt.Sprint(o.fresh)}, {"where", where}})
 			return nil
 		}
 		if o.fresh {
@@ -389,8 +416,15 @@ func resumeOne(name string, o resumeOpts) error {
 	}
 	p, err := paneGet(pane)
 	if err != nil {
-		undoStart(m)
-		return err
+		if l.placement != "pane" {
+			undoStart(m)
+			return err
+		}
+		// Its own pane, reused: the agent is up in a pane already known
+		// (the same pane and terminal), so record it rather than leave a
+		// live agent no record points at.
+		warn("couldn't read %s after the start (%v); recording it as the pane it was", pane, herdrMsg(err))
+		p = cur
 	}
 
 	// The agent is up: record it before anything else can fail, so the
@@ -404,12 +438,26 @@ func resumeOne(name string, o resumeOpts) error {
 	}
 	if o.fresh {
 		// A new conversation: the record takes its session, once herdr names
-		// one that isn't the old.
+		// one that isn't the old. The old one there means the launcher
+		// resumed it after all: that's not a fresh start, so it's taken back.
 		old := rec.Session
-		if s := sessionIn(p.PaneID); s != "" && s != old {
+		s := sessionIn(p.PaneID)
+		for try := 0; old != "" && s == old && try < 5; try++ {
+			time.Sleep(400 * time.Millisecond) // herdr may still be naming the last one
+			s = sessionIn(p.PaneID)
+		}
+		switch {
+		case old != "" && s == old:
+			_ = herdr(nil, "agent", "rename", p.PaneID, "--clear")
+			undoStart(m)
+			if l.placement == "pane" {
+				undoReusedPane(rec, l.pane, cd, cur.Cwd)
+			}
+			return fail("%s came back on its old conversation %s, not a new one (does the launcher pass --resume itself?)", name, old)
+		case s != "":
 			rec.Session = s
-		} else {
-			warn("couldn't confirm %s's new session in %s (herdr reports %q); a list or watch will record it", name, p.PaneID, s)
+		default:
+			warn("couldn't confirm %s's new session in %s; a list or watch will record it", name, p.PaneID)
 			rec.Session = ""
 		}
 	} else if s := sessionIn(p.PaneID); s != rec.Session {
@@ -419,14 +467,37 @@ func resumeOne(name string, o resumeOpts) error {
 	}
 	rec.Cwd, rec.Gated, rec.Launcher = cwd, gated, launcher
 	rec.Resumed, rec.Resumes = nowISO(), rec.Resumes+1
-	if err := writeRecord(rec); err != nil {
-		return fail("%s is running again in %s, but its dispatch record could not be written: %v", name, p.PaneID, err)
+	started := "resumed"
+	if o.fresh {
+		started = "started_fresh"
 	}
-
 	sound := rec.Sound
 	if sound == "" {
 		sound = "off"
 	}
+	out := []kv{{"name", name}, {"outcome", started}, {"pane_id", p.PaneID}, {"workspace_id", p.WorkspaceID}, {"tab_id", p.TabID},
+		{"sound", sound}, {"session", rec.Session}, {"resumes", fmt.Sprint(rec.Resumes)}}
+	if machine != "" {
+		out = append(out, kv{"machine", machine})
+	}
+	if rec.As != "" {
+		out = append(out, kv{"as", rec.As})
+	}
+	// From here the agent is up: what goes wrong is a warning on a started
+	// agent, never a "failed" a caller would retry.
+	upBut := func(what string) error {
+		if o.asJSON {
+			emitJSON(append(out, kv{"warning", what}))
+			warn("%s is running again in %s, but %s", name, p.PaneID, what)
+			return nil
+		}
+		fmt.Println(jsonLine(out))
+		return fail("%s is running again in %s, but %s", name, p.PaneID, what)
+	}
+	if err := writeRecord(rec); err != nil {
+		return upBut(fmt.Sprintf("its dispatch record could not be written: %v", err))
+	}
+
 	msg := resumeNotice
 	if o.fresh {
 		msg = freshNotice
@@ -441,22 +512,10 @@ func resumeOne(name string, o resumeOpts) error {
 		warn("%s is running again in %s, but tagging its sound failed: %v (bowery mute|unmute %s)", name, p.PaneID, herdrMsg(err), name)
 	}
 	if err := herdr(nil, "agent", "prompt", name, msg); err != nil {
-		return fail("%s is running again in %s, but the resume notice didn't reach it: %v; "+
-			"send it yourself (herdr agent prompt %s \"<notice>\"), or done it", name, p.PaneID, herdrMsg(err), name)
+		return upBut(fmt.Sprintf("the first prompt didn't reach it: %v; send it yourself (herdr agent prompt %s \"<notice>\"), or done it",
+			herdrMsg(err), name))
 	}
-	started := "resumed"
-	if o.fresh {
-		started = "started_fresh"
-	}
-	out := []kv{{"name", name}, {"outcome", started}, {"pane_id", p.PaneID}, {"workspace_id", p.WorkspaceID}, {"tab_id", p.TabID},
-		{"sound", sound}, {"session", rec.Session}, {"resumes", fmt.Sprint(rec.Resumes)}}
-	if machine != "" {
-		out = append(out, kv{"machine", machine})
-	}
-	if rec.As != "" {
-		out = append(out, kv{"as", rec.As})
-	}
-	fmt.Println(jsonLine(out))
+	emitJSON(out)
 	return nil
 }
 
@@ -620,8 +679,25 @@ func planLanding(rec *Record, o resumeOpts, ags []Agent, ps []Pane, all []Worksp
 
 // resumable says whether resume could bring a dead record's agent back:
 // it has a session, and its directory and worktrees are still there.
+// resumeCmd is the command that would bring a dead record's agent back:
+// --fresh when there's no session to resume, and --gated|--ungated when the
+// record is too old to say how it was started.
+func resumeCmd(r *Record) string {
+	c := "bowery resume " + r.Name
+	if r.Session == "" {
+		c += " --fresh"
+	}
+	if r.Cwd == "" {
+		c += " --gated|--ungated"
+	}
+	return c
+}
+
+// resumable says whether resume (perhaps --fresh: see resumeCmd) could bring
+// a dead record's agent back: a claude agent whose directory and worktrees
+// are still there.
 func resumable(r *Record) (bool, error) {
-	if r.Session == "" || (r.Kind != "" && r.Kind != "claude") {
+	if r.Kind != "" && r.Kind != "claude" {
 		return false, nil
 	}
 	cwd := r.Cwd

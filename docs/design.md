@@ -239,11 +239,19 @@ new session, once herdr confirms it, so the next plain resume continues the
 fresh one. It counts as a resume, so `--not-within` still guards it.
 
 `--json` makes `resume` print exactly one JSON line on stdout, whatever
-happens, with an `outcome`: `resumed` or `started_fresh` (with the pane, tab
+happens (a usage error and a crash included), with an `outcome`: `resumed` or `started_fresh` (with the pane, tab
 and session, as before), `alive`, `busy` (another resume or dispatch holds
 the name), `too_soon`, `dry_run`, `refused` or `failed` (with `why`). Under
 `--if-dead` the first five exit 0 and the last two don't, so a caller can
-tell "it's up" from "too soon" without reading prose.
+tell "it's up" from "too soon" without reading prose. Once the agent is up,
+a failure after that (its record can't be written, its first prompt didn't
+reach it) is a `warning` on `resumed`/`started_fresh`, never `failed`: a
+caller mustn't retry a seat that's running. `--fresh` is refused through a
+launcher that passes `--resume` itself, and taken back if the agent comes up
+on its old conversation. A record with no session (an older one, or a fresh
+start herdr didn't name) is offered by `list` and `orphans` as
+`bowery resume <name> --fresh`, and with `--gated|--ungated` when it's too old
+to say how it was started.
 
 Only a record makes an agent resumable: an agent bowery didn't dispatch (a
 pane another tool started) has none, and is out of reach.

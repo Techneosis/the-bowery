@@ -8,8 +8,28 @@ import (
 	"strings"
 )
 
+// jsonOnce is a --json command's promise of exactly one line on stdout:
+// once on, the first emitJSON prints it, and a die before then prints a
+// "refused" line of its own.
+var jsonOnce struct {
+	on, done bool
+	name     string
+}
+
+func emitJSON(fields []kv) {
+	if jsonOnce.done {
+		return
+	}
+	jsonOnce.done = true
+	fmt.Println(jsonLine(fields))
+}
+
 func die(format string, args ...any) {
-	fmt.Fprintf(os.Stderr, "bowery: "+format+"\n", args...)
+	msg := fmt.Sprintf(format, args...)
+	if jsonOnce.on && !jsonOnce.done {
+		emitJSON([]kv{{"name", jsonOnce.name}, {"outcome", "refused"}, {"why", msg}})
+	}
+	fmt.Fprintf(os.Stderr, "bowery: %s\n", msg)
 	os.Exit(1)
 }
 
