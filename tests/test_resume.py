@@ -594,6 +594,52 @@ class Resume(Bed):
         self.assertEqual(self.record("halfway")["pane_id"], self.agent("halfway")["pane_id"])
         self.ok("done", "halfway", "--force")
 
+    def test_a_failed_prompt_in_a_reused_pane_is_taken_back_and_said_plainly(self):
+        # Its own pane, made by bowery: closed with the half-started claude in it.
+        a = self.dispatch("ownp", "--cwd", self.repo)
+        self.exit_to_shell("ownp")
+        before = self.records("ownp")[0].read_text()
+        rc, out = self.bowery("resume", "ownp", env={"FAKE_PROMPT_FAIL": "1"})
+        self.assertNotEqual(rc, 0, out)
+        self.assertIn("it was taken back", out)
+        self.assertIsNone(self.pane(a["pane_id"]))
+        self.assertEqual(self.records("ownp")[0].read_text(), before, "the record is put back as it was")
+        # A pane that was someone's own: left, unnamed, and said so.
+        host = self.new_workspace("host2", str(self.repo))
+        self.dispatch("theirs", "--pane", host["pane_id"], "--cwd", self.repo)
+        self.exit_to_shell("theirs")
+        rc, out = self.bowery("resume", "theirs", env={"FAKE_PROMPT_FAIL": "1"})
+        self.assertNotEqual(rc, 0, out)
+        self.assertIn(f"still running in {host['pane_id']}, unnamed", out)
+        self.assertNotIn("theirs", self.agent_names(), "it doesn't keep the agent's name")
+        self.refused("an unnamed claude, perhaps left by a resume that was taken back", "resume", "theirs")
+
+    def test_a_crash_after_the_start_leaves_a_recorded_live_seat(self):
+        from _binary import BIN
+        self.dispatch("crash", "--cwd", self.repo)
+        self.kill("crash")
+        proc = subprocess.Popen([BIN, "resume", "crash"], env={**self.env, "FAKE_PROMPT_SLEEP": "8"}, cwd=self.t,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        import time
+        for _ in range(100):
+            if self.record("crash").get("resumes") == 1:
+                break
+            time.sleep(0.1)
+        proc.kill()  # between the record and the first prompt
+        proc.wait()
+        a = self.agent("crash")
+        self.assertIsNotNone(a)
+        self.assertEqual(self.record("crash")["pane_id"], a["pane_id"], "recorded where it is")
+        rc, got = self.json_of("crash", "--json", "--if-dead")
+        self.assertEqual(got["outcome"], "alive", "so a job leaves it be")
+
+    def test_an_ordinary_resume_carries_no_warning(self):
+        self.dispatch("calm", "--cwd", self.repo)
+        self.kill("calm")
+        rc, got = self.json_of("calm", "--json")
+        self.assertEqual(got["outcome"], "resumed")
+        self.assertNotIn("warning", got)
+
     def test_a_failed_resume_doesnt_wedge_the_next(self):
         self.dispatch("fails", "--cwd", self.repo)
         self.kill("fails")

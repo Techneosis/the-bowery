@@ -257,11 +257,11 @@ func resumeOne(name string, o resumeOpts) error {
 	}
 	for _, a := range ags {
 		if rec.Session != "" && a.SessionID() == rec.Session {
-			who := a.Name
-			if who == "" {
-				who = "an unnamed agent"
+			if a.Name == "" {
+				return refuse("%s's session %s is live in %s, in an unnamed claude, perhaps left by a resume that was taken back; "+
+					"close it, or carry on there, first", name, rec.Session, a.PaneID)
 			}
-			return refuse("%s's session %s is live in %s (%s); one conversation can't run twice", name, rec.Session, a.PaneID, who)
+			return refuse("%s's session %s is live in %s (%s); one conversation can't run twice", name, rec.Session, a.PaneID, a.Name)
 		}
 	}
 	cwd := rec.Cwd
@@ -433,8 +433,12 @@ func resumeOne(name string, o resumeOpts) error {
 		p = cur
 	}
 
-	// The agent is up: record it before anything else can fail, so the
-	// record never points at a pane it left.
+	// The agent is up: record it at once, so a crash from here on (a
+	// signal, a dropped ssh) leaves a live seat that is recorded, which a
+	// caller sees as alive: the safe side. The record as it was is kept,
+	// to put back if this start has to be taken back.
+	oldRecord, _ := os.ReadFile(recordPath(name))
+	oldSession := rec.Session
 	rec.PaneID, rec.TerminalID, rec.WorkspaceID, rec.TabID = p.PaneID, p.TerminalID, p.WorkspaceID, p.TabID
 	switch l.placement {
 	case "swarm":
@@ -442,51 +446,85 @@ func resumeOne(name string, o resumeOpts) error {
 	case "workspace":
 		rec.Placement, rec.CreatedPane, rec.Owns = "workspace", true, &Owns{Kind: "workspace", ID: p.WorkspaceID}
 	}
-	// takeBack undoes a start that mustn't stand, and says what's left.
+	rec.Cwd, rec.Gated, rec.Launcher = cwd, gated, launcher
+	rec.Resumed, rec.Resumes = nowISO(), rec.Resumes+1
+	var warnings []string
+	recorded := true
+	if err := writeRecord(rec); err != nil {
+		warn("%s is running again in %s, but its dispatch record could not be written: %v", name, p.PaneID, err)
+		warnings = append(warnings, "record_not_written")
+		recorded = false
+	}
+
+	// takeBack undoes a start that mustn't stand, puts the record back as it
+	// was, and says only what it knows of what's left.
 	takeBack := func() string {
 		_ = herdr(nil, "agent", "rename", p.PaneID, "--clear")
 		undoStart(m)
 		if l.placement == "pane" {
 			undoReusedPane(rec, l.pane, cd, cur.Cwd)
 		}
-		if ags, err := agents(); err == nil {
-			for _, a := range ags {
-				if a.PaneID == p.PaneID {
+		if recorded && len(oldRecord) > 0 {
+			if err := restoreRecord(name, oldRecord); err != nil {
+				warn("couldn't put %s's record back as it was: %v", name, err)
+			}
+		}
+		ags, err := agents()
+		if err != nil {
+			return fmt.Sprintf("; it may still be running in %s: check it", p.PaneID)
+		}
+		for _, a := range ags {
+			if a.PaneID == p.PaneID {
+				if a.Name == "" {
 					return fmt.Sprintf("; it's still running in %s, unnamed: close it or carry on there", p.PaneID)
 				}
+				return fmt.Sprintf("; it may still be running in %s: check it", p.PaneID)
 			}
+		}
+		if _, err := paneGet(p.PaneID); err == nil && l.placement == "pane" {
+			return "; it was stopped, and its pane is left as it was"
 		}
 		return "; it was taken back"
 	}
-	var warnings []string
-	if o.fresh {
-		// A new conversation: the record takes its session once herdr names
-		// one that isn't the old. The old one there means the launcher
-		// resumed it after all: that's not a fresh start, so it's taken back.
-		old := rec.Session
-		s := ""
-		for try := 0; try < 25; try++ { // herdr may take a while to name it
-			if s = sessionIn(p.PaneID); s != "" && s != old {
-				break
-			}
-			time.Sleep(400 * time.Millisecond)
+
+	// Which conversation came up, within one deadline: on --fresh one that
+	// isn't the old; on a resume the record's own. The other one means it's
+	// not the start asked for, so it's taken back.
+	want := func(s string) bool {
+		if o.fresh {
+			return s != "" && s != oldSession
 		}
-		switch {
-		case old != "" && s == old:
-			left := takeBack()
-			return fail("%s came back on its old conversation %s, not a new one (does the launcher pass --resume itself?)%s", name, old, left)
-		case s != "":
+		return s == oldSession
+	}
+	s := ""
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(300 * time.Millisecond) {
+		s = sessionNow(p.PaneID)
+		// Done when it's the one asked for. On a resume, another named one
+		// is an answer too. On --fresh the old one may be a stale report,
+		// so keep looking until the deadline.
+		if want(s) || (!o.fresh && s != "") || time.Now().After(deadline) {
+			break
+		}
+	}
+	switch {
+	case want(s):
+		if o.fresh && rec.Session != s {
 			rec.Session = s
-		default:
-			// Unconfirmed: keep what the record had; a list or watch fills it.
-			warn("couldn't confirm %s's new session in %s; the record keeps %q until a list or watch sees it", name, p.PaneID, rec.Session)
-			warnings = append(warnings, "session_unconfirmed")
+			if recorded {
+				if err := writeRecord(rec); err != nil {
+					warn("couldn't record %s's new session: %v", name, err)
+				}
+			}
 		}
-	} else if s := sessionIn(p.PaneID); s != rec.Session {
-		// The session stays the record's: claude --resume keeps its id, and
-		// only one that matches is confirmation.
-		warn("couldn't confirm %s's session in %s (herdr reports %q); the record keeps %s", name, p.PaneID, s, rec.Session)
+	case s == "":
+		warn("couldn't confirm %s's session in %s; the record keeps %q until a list or watch sees it", name, p.PaneID, rec.Session)
 		warnings = append(warnings, "session_unconfirmed")
+	case o.fresh:
+		left := takeBack()
+		return fail("%s came back on its old conversation %s, not a new one (does the launcher pass --resume itself?)%s", name, oldSession, left)
+	default:
+		left := takeBack()
+		return fail("%s came up on conversation %s, not its own %s (does the launcher pass its arguments on?)%s", name, s, oldSession, left)
 	}
 
 	sound := rec.Sound
@@ -507,15 +545,13 @@ func resumeOne(name string, o resumeOpts) error {
 		warn("%s is running again in %s, but tagging its sound failed: %v (bowery mute|unmute %s)", name, p.PaneID, herdrMsg(err), name)
 	}
 	// The first prompt is why it's up (the notice, and the caller's reason):
-	// one that never arrives leaves a seat sitting idle, so it's taken back
-	// and reported failed, for the caller to try again. Nothing is recorded.
+	// one that never arrives leaves a seat sitting idle, so it's taken back,
+	// its record put back, and reported failed, for the caller to try again.
 	if err := herdr(nil, "agent", "prompt", name, msg); err != nil {
 		left := takeBack()
 		return fail("%s started, but its first prompt didn't reach it: %v%s", name, herdrMsg(err), left)
 	}
 
-	rec.Cwd, rec.Gated, rec.Launcher = cwd, gated, launcher
-	rec.Resumed, rec.Resumes = nowISO(), rec.Resumes+1
 	started := "resumed"
 	if o.fresh {
 		started = "started_fresh"
@@ -528,26 +564,52 @@ func resumeOne(name string, o resumeOpts) error {
 	if rec.As != "" {
 		out = append(out, kv{"as", rec.As})
 	}
-	var writeErr error
-	if writeErr = writeRecord(rec); writeErr != nil {
-		// Up and told why: a running seat, so never "failed". But a fixed
-		// warning a caller can count: --not-within won't see this start.
-		warnings = append(warnings, "record_not_written")
-	}
 	if len(warnings) > 0 {
 		out = append(out, kv{"warning", strings.Join(warnings, ",")})
 	}
-	if writeErr != nil {
-		if o.asJSON {
-			emitJSON(out)
-			warn("%s is running again in %s, but its dispatch record could not be written: %v", name, p.PaneID, writeErr)
-			return nil
-		}
+	if !recorded && !o.asJSON {
 		fmt.Println(jsonLine(out))
-		return fail("%s is running again in %s, but its dispatch record could not be written: %v", name, p.PaneID, writeErr)
+		return fail("%s is running again in %s, but its dispatch record could not be written", name, p.PaneID)
 	}
 	emitJSON(out)
 	return nil
+}
+
+// sessionNow is the session herdr reports for the agent in a pane, or ""
+// (one read, no retries: callers keep their own deadline).
+func sessionNow(pane string) string {
+	ags, err := agents()
+	if err != nil {
+		return ""
+	}
+	for _, a := range ags {
+		if a.PaneID == pane {
+			return a.SessionID()
+		}
+	}
+	return ""
+}
+
+// restoreRecord puts a record file back exactly as it was read.
+func restoreRecord(name string, b []byte) error {
+	path := recordPath(name)
+	f, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	_, werr := f.Write(b)
+	if cerr := f.Close(); werr == nil {
+		werr = cerr
+	}
+	if werr == nil {
+		werr = os.Chmod(tmp, 0o644)
+	}
+	if werr != nil {
+		_ = os.Remove(tmp)
+		return werr
+	}
+	return os.Rename(tmp, path)
 }
 
 // undoReusedPane takes back a failed start in the agent's own reused pane.
@@ -663,6 +725,10 @@ func planLanding(rec *Record, o resumeOpts, ags []Agent, ps []Pane, all []Worksp
 			}
 			for _, a := range ags {
 				if a.PaneID == p.PaneID {
+					if a.Name == "" && (a.Kind == "" || a.Kind == "claude") {
+						return landing{}, refuse("%s's pane %s holds an unnamed claude (left by a resume that was taken back, "+
+							"or started by hand); close it, or carry on there, first", rec.Name, p.PaneID)
+					}
 					who := a.Name
 					if who == "" {
 						who = "an unnamed " + a.Kind + " agent"

@@ -243,17 +243,20 @@ happens (a usage error and a crash included), with an `outcome`: `resumed` or `s
 and session, as before), `alive`, `busy` (another resume or dispatch holds
 the name), `too_soon`, `dry_run`, `refused` or `failed` (with `why`). Under
 `--if-dead` the first five exit 0 and the last two don't, so a caller can
-tell "it's up" from "too soon" without reading prose. The first prompt (the
-notice and the caller's reason) is sent before anything is recorded: one
-that never arrives takes the start back and is `failed`, since a seat up with
-no reason would just sit idle. Once it has arrived, a record that can't be
-written is a fixed `"warning": "record_not_written"` on `resumed` or
-`started_fresh`, never `failed`: a caller mustn't retry a running seat.
-`--fresh` waits up to 10 seconds for herdr to name the new session; the old
-one means the launcher resumed it after all, so the start is taken back (and
-it says if that conversation is still running in the agent's own pane); none
-named is `"warning": "session_unconfirmed"`, and the record keeps its
-session until a `list` or `watch` sees the new one. A record with no session (an older one, or a fresh
+tell "it's up" from "too soon" without reading prose. The record is written
+as soon as the agent is up, so a crash after that leaves a recorded, live
+seat (which a caller sees as `alive`), and the old record is kept to put
+back. Within one 10-second deadline, bowery then checks which conversation
+came up: the record's own on a resume, a new one on `--fresh`. A different
+one (a launcher that drops its arguments, or passes `--resume` itself) takes
+the start back. None named is `"warning": "session_unconfirmed"`, and the
+record keeps its session until a `list` or `watch` sees one. Then the first
+prompt (the notice and the caller's reason): one that never arrives takes
+the start back too, since a seat up with no reason would just sit idle. A
+take-back puts the old record back, reports `failed`, and says only what it
+knows of what's left (taken back; or still running, unnamed, in the agent's
+own pane, which a later resume then names). A record that can't be written
+is `"warning": "record_not_written"` on a started agent, never `failed`. A record with no session (an older one, or a fresh
 start herdr didn't name) is offered by `list` and `orphans` as
 `bowery resume <name> --fresh`, and with `--gated|--ungated` when it's too old
 to say how it was started.

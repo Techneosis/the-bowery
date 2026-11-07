@@ -338,11 +338,15 @@ def run(s, argv):
         a = s["agents"].get(name) or next((x for x in s["agents"].values() if x["pane_id"] == name), None)
         if a and verb == "rename":
             key = next(k for k, x in s["agents"].items() if x is a)
-            if args[1] in s["agents"] and s["agents"][args[1]] is not a:
+            if args[1] != "--clear" and args[1] in s["agents"] and s["agents"][args[1]] is not a:
                 err(cid, "agent_name_taken", f"agent {args[1]} already exists")
             del s["agents"][key]
-            a["name"] = args[1]
-            s["agents"][args[1]] = a
+            if args[1] == "--clear":
+                a["name"] = ""
+                s["agents"]["~" + a["pane_id"]] = a
+            else:
+                a["name"] = args[1]
+                s["agents"][args[1]] = a
             save(s)
             out(cid, {"type": "agent_renamed", "agent": agent_view(s, a)})
         if not a:
@@ -362,6 +366,9 @@ def run(s, argv):
         if verb == "wait":
             out(cid, {"type": "agent_status", "agent": agent_view(s, a)})
         if verb == "prompt":
+            if os.environ.get("FAKE_PROMPT_SLEEP"):
+                import time
+                time.sleep(float(os.environ["FAKE_PROMPT_SLEEP"]))
             if os.environ.get("FAKE_PROMPT_FAIL") == "1":
                 err(cid, "timeout", "timed out waiting for the agent to take the prompt")
             if a["agent_status"] == "blocked":
