@@ -215,6 +215,19 @@ class Remote(Bed):
         self.assertIn(f"{BOX}", out)
         self.assertIn("find under", out)
 
+    def test_one_records_ssh_failure_is_that_records(self):
+        a = self.dispatch("aa", "--machine", BOX, "--as", "alice", "--worktree", "aa", "--cwd", "~/dev/app")
+        b = self.dispatch("bb", "--machine", BOX, "--as", "alice", "--worktree", "bb", "--cwd", "~/dev/app")
+        for x in (a, b):
+            self.herdr("tab", "close", x["tab_id"], machine=BOX)
+        # resumable's check runs as alice; orphans' own look at the worktree
+        # doesn't, and that is the call that drops.
+        out = self.ok("orphans", env={"FAKE_SSH_FAIL_ON": f"test -e {a['worktree']}"})
+        self.assertNotIn("unreachable", out)
+        self.assertIn("aa: can't tell whether its worktree", out)
+        self.assertIn("bb: agent gone, its worktree still there", out)
+        self.assertNotIn("aa: dispatch record with nothing left", out)
+
     def test_a_worktree_path_on_the_box_needs_machine(self):
         loose = self.box / ".herdr" / "worktrees" / "app" / "loose"
         loose.parent.mkdir(parents=True)

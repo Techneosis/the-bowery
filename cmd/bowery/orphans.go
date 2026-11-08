@@ -256,13 +256,19 @@ func findOrphans() ([]orphan, error) {
 			out = append(out, rec)
 			continue
 		}
-		left := false
+		left, unsure := false, false
 		for _, w := range recWorktrees(r) {
 			ex, err := exists(w.Path)
 			if err != nil {
-				return nil, err
+				// That record's problem, not the box's: the rest still count.
+				warn("%s: can't tell whether its worktree %s is still there: %v", name, w.Path, herdrMsg(err))
+				unsure = true
+				continue
 			}
 			left = left || ex
+		}
+		if unsure && !left {
+			continue // never "nothing left behind it" on a guess
 		}
 		switch {
 		case !left && len(recWorktrees(r)) == 0 && res:

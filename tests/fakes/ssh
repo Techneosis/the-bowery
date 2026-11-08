@@ -16,6 +16,12 @@ while (($#)); do
 done
 printf '%s\t%s\n' "$host" "$*" >>"$FAKE_HERDR_DIR/ssh.log"
 printf '%s\n' "$opts" >>"$FAKE_HERDR_DIR/ssh-opts.log"
+# FAKE_SSH_FAIL_ON: a call whose command holds this text fails as a dropped
+# connection does (exit 255), so one call can fail while the rest work.
+if [[ -n $FAKE_SSH_FAIL_ON && $* == *"$FAKE_SSH_FAIL_ON"* ]]; then
+  echo "Connection to $host closed by remote host." >&2
+  exit 255
+fi
 for pair in $FAKE_SSH_HOSTS; do
   if [[ ${pair%%=*} == "$host" ]]; then
     export HOME=${pair#*=}
