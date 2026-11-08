@@ -848,25 +848,48 @@ func cmdAdopt(argv []string) {
 	}
 	var said []string
 	if forResume {
-		if rec.Kind != "claude" && !(fresh && rec.Kind == "") {
+		if rec.Kind == "" && live != nil {
+			rec.Kind = live.Kind // an older record, or a new one: the agent says
+		}
+		if rec.Kind != "claude" {
 			die("adopt: --launcher and --gated|--ungated are for claude agents (%s is %q)", name, rec.Kind)
 		}
-		// An existing record that lacks a session or a folder isn't filled in
-		// here (yet): which live conversation is really its own takes more
-		// than a name. A record adopt writes new is the agent's own, whole.
-		if !fresh && (rec.Session == "" || rec.Cwd == "") {
-			missing := "session"
-			switch {
-			case rec.Session == "" && rec.Cwd == "":
-				missing = "session and no folder of its own"
-			case rec.Cwd == "":
-				missing = "folder of its own (an older record)"
+		// Records from before 0.3.0 have no folder of their own, so their
+		// gated says nothing: the mode must be given. A newer record's mode
+		// is what it was started with, and adopt never widens it.
+		old := !fresh && rec.Cwd == ""
+		if (fresh || old) && gated == "" {
+			what := "say how it was started"
+			if old {
+				what = "its record is older than bowery 0.3.0 and doesn't say how it was started; say"
 			}
-			die("adopt %s: refused, nothing changed: its record has no %s, which adopt doesn't fill in; "+
-				"bowery done %s (if it's finished with its worktrees), then adopt it", name, missing, name)
+			die("adopt %s: %s: --gated (permission prompts on) or --ungated", name, what)
 		}
-		if fresh && gated == "" {
-			die("adopt %s: say how it was started: --gated (permission prompts on) or --ungated", name)
+		if !fresh && !old && rec.Gated && gated == "ungated" {
+			die("adopt %s: refused, nothing changed: its record says it was started --gated; adopt won't widen that "+
+				"(resume --ungated does, for one start)", name)
+		}
+		// An existing record without a session or a folder is filled from
+		// its live agent, both from the same one, and only when that agent
+		// is in the record's own terminal (or, for a record that has none,
+		// its own pane): a name alone can't say which conversation is its.
+		if !fresh && (rec.Session == "" || rec.Cwd == "") {
+			if live == nil {
+				die("adopt %s: refused, nothing changed: its record has no session or folder, and no live agent is named %s "+
+					"to take them from; bowery resume %s --fresh starts it in a new conversation", name, name, name)
+			}
+			switch {
+			case rec.TerminalID != "" && livePane.TerminalID != rec.TerminalID:
+				die("adopt %s: refused, nothing changed: the live %s (in %s) isn't in its record's terminal %s; "+
+					"bowery done %s, then adopt the live one", name, name, livePane.PaneID, rec.TerminalID, name)
+			case rec.TerminalID == "" && rec.PaneID == "":
+				die("adopt %s: refused, nothing changed: its record names no pane or terminal to check the live %s against; "+
+					"bowery done %s, then adopt the live one", name, name, name)
+			case rec.TerminalID == "" && livePane.PaneID != rec.PaneID:
+				die("adopt %s: refused, nothing changed: the live %s (in %s) isn't in its record's pane %s; "+
+					"bowery done %s, then adopt the live one", name, name, livePane.PaneID, rec.PaneID, name)
+			}
+			rec.Session, rec.Cwd = "", ""
 		}
 		if rec.Session == "" {
 			s := live.SessionID()

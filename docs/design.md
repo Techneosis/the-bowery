@@ -276,10 +276,15 @@ can use: its session from herdr, the folder its claude runs in (the pane's
 foreground folder, not where the shell has moved to), and the launcher and
 permission mode given. One of `--gated`/`--ungated` is required for a new
 record, since bowery can't see how a hand-started claude was launched. On an
-existing record they set or change the mode and `--launcher` the launcher.
-An existing record that lacks a session or a folder of its own isn't filled
-in from a live agent (yet): telling which conversation is really its own
-takes more than a name, so it's refused ("bowery done X, then adopt it").
+existing record `--launcher` sets the launcher, and `--gated` sets the mode;
+`--ungated` over a record that says `--gated` is refused, since adopt never
+widens a seat (`resume --ungated` does, for one start). An existing record
+that lacks a session or a folder of its own (one from before 0.3.0, or a
+`--fresh` start herdr never named) is filled from its live agent, the
+session and the folder both from that one, and only when the agent sits in
+the record's own terminal (or, for a record with none, its own pane): a name
+alone can't say which conversation is its. A record from before 0.3.0
+doesn't say how it was started, so it needs `--gated` or `--ungated`.
 Everything is checked
 before the record is written: no session reported, two live agents of the
 name, a bad name or path are refused with nothing written or said. Nothing

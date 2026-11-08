@@ -928,19 +928,66 @@ class Resume(Bed):
         self.ok("adopt", "where", "--ungated")
         self.assertEqual(self.record("where")["cwd"], str(self.repo))
 
-    def test_adopt_wont_fill_in_an_old_record(self):
-        self.dispatch("elder", "--cwd", self.repo)
-        f = self.records("elder")[0]
+    def old_record(self, name, *drop):
+        f = self.records(name)[0]
         rec = json.loads(f.read_text())
-        for k in ("session", "cwd", "gated", "model"):
+        for k in drop or ("session", "cwd", "gated", "model"):
             rec.pop(k, None)
         f.write_text(json.dumps(rec))
+        return f, rec
+
+    def test_adopt_fills_an_old_record_from_its_own_live_agent(self):
+        self.dispatch("elder", "--cwd", self.repo)
+        sess = self.agent("elder")["session"]
+        f, rec = self.old_record("elder")
         before = f.read_text()
-        self.refused("which adopt doesn't fill in; bowery done elder", "adopt", "elder", "--ungated")
+        self.refused("older than bowery 0.3.0", "adopt", "elder", "--launcher", "seat elder")
         self.assertEqual(f.read_text(), before, "nothing written")
-        rec["cwd"] = str(self.repo)  # a folder, but no session
+        self.ok("adopt", "elder", "--ungated")
+        got = self.record("elder")
+        self.assertEqual((got["session"], got["cwd"]), (sess, str(self.repo)), "both from the live agent")
+        self.exit_to_shell("elder")
+        self.resume("elder")
+        self.assertEqual(self.agent("elder")["args"], ["--dangerously-skip-permissions", "--resume", sess])
+
+    def test_adopt_fills_session_and_folder_together(self):
+        # A folder but no session (a --fresh herdr never named): the live
+        # agent's folder comes with its session, never one without the other.
+        self.dispatch("half", "--cwd", self.repo)
+        sess = self.agent("half")["session"]
+        f, rec = self.old_record("half", "session")
+        rec["cwd"] = str(self.t)
         f.write_text(json.dumps(rec))
-        self.refused("its record has no session, which adopt doesn't fill in", "adopt", "elder", "--ungated")
+        self.ok("adopt", "half", "--ungated")
+        got = self.record("half")
+        self.assertEqual((got["session"], got["cwd"]), (sess, str(self.repo)))
+
+    def test_adopt_fills_only_from_the_agent_in_its_own_terminal(self):
+        self.dispatch("elder2", "--cwd", self.repo)
+        f, rec = self.old_record("elder2")
+        rec["terminal_id"] = "term_elsewhere"
+        f.write_text(json.dumps(rec))
+        before = f.read_text()
+        self.refused("isn't in its record's terminal term_elsewhere", "adopt", "elder2", "--ungated")
+        rec.pop("terminal_id")
+        rec["pane_id"] = "w9:p9"
+        f.write_text(json.dumps(rec))
+        self.refused("isn't in its record's pane w9:p9", "adopt", "elder2", "--ungated")
+        rec.pop("pane_id")
+        f.write_text(json.dumps(rec))
+        self.refused("names no pane or terminal", "adopt", "elder2", "--ungated")
+        self.kill_by_tab(rec["tab_id"])
+        f, rec = self.old_record("elder2")
+        self.refused("no live agent is named elder2", "adopt", "elder2", "--ungated")
+        self.assertNotIn("session", self.record("elder2"))
+
+    def test_adopt_never_widens_a_gated_seat(self):
+        self.dispatch("tight", "--cwd", self.repo, "--gated")
+        before = self.records("tight")[0].read_text()
+        self.refused("adopt won't widen that", "adopt", "tight", "--ungated")
+        self.assertEqual(self.records("tight")[0].read_text(), before)
+        self.ok("adopt", "tight", "--gated")
+        self.assertTrue(self.record("tight")["gated"])
 
     def test_adopt_takes_paths_after_double_dash(self):
         self.dispatch("dd", "--cwd", self.repo)
