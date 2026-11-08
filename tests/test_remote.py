@@ -117,6 +117,19 @@ class Remote(Bed):
         self.assertIn("alice\tgit -C", as_log, "remote git ran as alice")
         self.assertIn("worktree add", as_log)
 
+    def test_ssh_gives_up_on_a_dead_box(self):
+        # A box that has gone away mid-connection must fail ssh, not hang a
+        # job that runs bowery blind: a connect timeout, and keepalives.
+        self.dispatch("far", "--machine", BOX, "--as", "alice", "--cwd", "~/dev/app", "--", "go")
+        calls = (self.herdr_dir / "ssh-opts.log").read_text().splitlines()
+        self.assertTrue(calls)
+        for opts in calls:
+            o = opts.split()
+            self.assertIn("BatchMode=yes", o)
+            self.assertIn("ConnectTimeout=10", o)
+            self.assertIn("ServerAliveInterval=15", o)
+            self.assertIn("ServerAliveCountMax=4", o)
+
     def test_a_home_path_maps_to_the_box(self):
         out = self.dispatch("mapped", "--machine", BOX, "--as", "alice", "--cwd", f"{self.home}/dev/app")
         self.assertEqual(self.pane(out["pane_id"], BOX)["cwd"], str(self.box / "dev" / "app"))

@@ -3,16 +3,19 @@
 #
 # FAKE_SSH_HOSTS is a list of "<host>=<home>" words: the box's $HOME for each
 # host it knows. Any other host fails as ssh does, with exit 255. Every call
-# is logged to $FAKE_HERDR_DIR/ssh.log, one line per call.
+# is logged to $FAKE_HERDR_DIR/ssh.log, one line per call, and its -o options
+# to ssh-opts.log, one call per line.
 host=""
+opts=""
 while (($#)); do
   case $1 in
-    -o) shift 2 ;;
+    -o) opts+="$2 "; shift 2 ;;
     -*) shift ;;
     *) host=$1; shift; break ;;
   esac
 done
 printf '%s\t%s\n' "$host" "$*" >>"$FAKE_HERDR_DIR/ssh.log"
+printf '%s\n' "$opts" >>"$FAKE_HERDR_DIR/ssh-opts.log"
 for pair in $FAKE_SSH_HOSTS; do
   if [[ ${pair%%=*} == "$host" ]]; then
     export HOME=${pair#*=}

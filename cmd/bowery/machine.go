@@ -193,7 +193,10 @@ func safeAncestors(p string, depth int) bool {
 }
 
 func sshRun(host, script string) (int, string, error) {
-	args := []string{"-o", "BatchMode=yes"}
+	// A box that is down, asleep or gone mid-call must fail the call, not
+	// hang it: jobs run bowery blind. herdr's own ssh uses the same numbers.
+	args := []string{"-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
+		"-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=4"}
 	if d := controlDir(); d != "" {
 		// %C is a 40-hex hash of the connection, so the path stays short.
 		args = append(args, "-o", "ControlMaster=auto", "-o", "ControlPath="+filepath.Join(d, "bowery-ssh-%C"),
