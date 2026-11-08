@@ -203,6 +203,15 @@ class Remote(Bed):
         self.assertIn("bowery resume far", out)
         self.assertIn(f"alice\tsh -c if test -d {far['worktree']}", (self.box / "as.log").read_text())
 
+    def test_orphans_dont_offer_a_resume_that_would_start_as_the_wrong_person(self):
+        far = self.dispatch("who", "--machine", BOX, "--as", "alice", "--worktree", "who", "--cwd", "~/dev/app")
+        self.herdr("tab", "close", far["tab_id"], machine=BOX)
+        self.assertIn("bowery resume who", self.ok("orphans"))
+        conf = self.config.read_text()
+        self.config.write_text("\n".join(l for l in conf.splitlines() if not l.startswith("identity_command")) + "\n")
+        self.assertNotIn("bowery resume who", self.ok("orphans"), "resume would refuse it")
+        self.refused("it would start as the wrong person", "resume", "who")
+
     def test_a_failing_find_on_the_box_is_not_no_worktrees(self):
         self.dispatch("far", "--machine", BOX, "--as", "alice", "--cwd", "~/dev/app")
         root = self.box / ".herdr" / "worktrees"

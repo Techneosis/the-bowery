@@ -108,12 +108,16 @@ func jsonString(s string) string {
 	return b.String()
 }
 
+// maxTimeoutMS is 24 hours: past that, a deadline in a time.Duration is no
+// longer far off but wraps into the past.
+const maxTimeoutMS = 24 * 60 * 60 * 1000
+
 // timeoutArg checks a --timeout value: milliseconds, a whole number above 0.
 // It returns the number as herdr is given it, never the raw word.
 func timeoutArg(v string) string {
 	n, err := strconv.Atoi(v)
-	if err != nil || n <= 0 {
-		die("--timeout takes milliseconds, a whole number above 0 (got '%s')", v)
+	if err != nil || n <= 0 || n > maxTimeoutMS {
+		die("--timeout takes milliseconds, a whole number from 1 to %d (24 hours) (got '%s')", maxTimeoutMS, v)
 	}
 	return strconv.Itoa(n)
 }

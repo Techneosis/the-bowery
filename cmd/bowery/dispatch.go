@@ -185,7 +185,7 @@ func cmdDispatch(argv []string) {
 		die("%v", err)
 	}
 	if held {
-		die("dispatch %s: refused, nothing changed: a resume or dispatch of %s is running", name, name)
+		die("dispatch %s: refused, nothing changed: a resume, dispatch, adopt or done of %s is running", name, name)
 	}
 	if loadRecord(name) != nil {
 		// Replacing it would forget the agent's session and its resumes

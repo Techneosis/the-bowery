@@ -299,6 +299,8 @@ def run(s, argv):
                     out(cid, {"type": "output_matched", "matched_line": line, "pane_id": pid})
             err(cid, "timeout", "timed out waiting for output match")
         if verb == "report-metadata":
+            if os.environ.get("FAKE_METADATA_FAIL") == "1":
+                err(cid, "internal_error", "the server could not answer")
             for tok in opts(args, "--token"):
                 k, _, v = tok.partition("=")
                 p["tokens"][k] = v
@@ -308,12 +310,25 @@ def run(s, argv):
             save(s)
             out(cid, {"type": "ok"})
         if verb == "process-info":
+            if os.environ.get("FAKE_PROCESS_INFO_FAIL") == "1":
+                err(cid, "internal_error", "the server could not answer")
             shell = p.get("pid") or 1000 + s["panes"].index(p)
             fg = [{"pid": shell, "name": "bash"}] if not p.get("busy") else [{"pid": 50000 + shell, "name": p["busy"]}]
             out(cid, {"type": "pane_process_info", "process_info": {
                 "pane_id": pid, "shell_pid": shell, "foreground_process_group_id": fg[0]["pid"], "foreground_processes": fg}})
     if noun == "agent":
         if verb == "list":
+            # FAKE_RENAME_ON_LIST="<n>:<old>:<new>": the n-th agent list
+            # finds <old> renamed <new> (something changed between looks).
+            spec = os.environ.get("FAKE_RENAME_ON_LIST", "")
+            if spec:
+                n, old, new = spec.split(":")
+                s["lists"] = s.get("lists", 0) + 1
+                if s["lists"] == int(n) and old in s["agents"]:
+                    a = s["agents"].pop(old)
+                    a["name"] = new
+                    s["agents"][new] = a
+                save(s)
             out(cid, {"type": "agent_list", "agents": [agent_view(s, a) for a in s["agents"].values()]})
         name = args[0] if args else ""
         if verb == "start":

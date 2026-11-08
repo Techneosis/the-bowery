@@ -119,7 +119,9 @@ other commands
                            record more worktrees as <name>'s; or give a live
                            agent started by hand a record resume can use (its
                            session and folder, plus the launcher and the
-                           permission mode it was started with)
+                           permission mode it was started with); or fill an
+                           old record with no session or folder from its
+                           agent, alive in the record's own terminal
   orphans [--machine L] [--json]
                            what done would clean up (and which dead agents
                            resume can bring back), on every server with a

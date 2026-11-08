@@ -167,6 +167,9 @@ included. It refuses:
   conversation must not run twice);
 - when the record has no session (written by an older bowery, never seen
   alive since) or no directory, or the agent is not claude;
+- when its recorded launcher isn't one plain command line (`--launcher CMD`
+  or `--no-launcher` overrides it), checked before `--not-within` so a "too
+  soon" can't hide it;
 - when its directory or any recorded worktree is gone (checked as its `--as`
   identity, whose directories may be closed to the ssh login);
 - when its `--as` and the config disagree: dispatched as someone, but there is
@@ -174,7 +177,8 @@ included. It refuses:
   that has identities now and a record with none;
 - for a record written before 0.3.0 (no `cwd` of its own), which doesn't say
   whether the agent was `--gated`: `--gated` or `--ungated` says, and is
-  recorded;
+  recorded (on a newer record, `--ungated` over `--gated` is for that start
+  only: the record stays gated);
 - with `--swarm` or `--workspace` while its old pane, tab or workspace is
   still open, since a new one would leave the old owned by nothing;
 - when the pane it would use is someone else's: the recorded terminal now
@@ -235,7 +239,8 @@ record someone holds, so a `done` can't drop a record they then put back.
 would lose the agent's session and resume count (`done <name>` clears it).
 `done <worktree path>` strikes the worktree from every record that claims
 it, and drops a record whose own directory was in it (there is nothing left
-to resume), unless its agent is alive. Once its record is written, a
+to resume), unless its agent is alive, or herdr can't say whether it is (then
+the record is only struck). Once its record is written, a
 failed sound tag or prompt says the agent is up and recorded, and prints
 its JSON line. The lock files live in the state dir's `locks/`
 folder and stay there: removing one would race the next taker.
@@ -249,8 +254,8 @@ fresh one. It counts as a resume, so `--not-within` still guards it.
 
 `--json` makes `resume` print exactly one JSON line on stdout, whatever
 happens (a usage error and a crash included), with an `outcome`: `resumed` or `started_fresh` (with the pane, tab
-and session, as before), `alive`, `busy` (another resume or dispatch holds
-the name), `too_soon`, `dry_run`, `refused` or `failed` (with `why`). Under
+and session, as before), `alive`, `busy` (another resume, dispatch, adopt or
+done holds the name), `too_soon`, `dry_run`, `refused` or `failed` (with `why`). Under
 `--if-dead` the first five exit 0 and the last two don't, so a caller can
 tell "it's up" from "too soon" without reading prose. The record is written
 as soon as the agent is up, so a crash after that leaves a recorded, live
@@ -265,7 +270,9 @@ the start back too, since a seat up with no reason would just sit idle. A
 take-back puts the old record back, reports `failed`, and says only what it
 knows of what's left (taken back; or still running, unnamed, in the agent's
 own pane, which a later resume then names). A record that can't be written
-is `"warning": "record_not_written"` on a started agent, never `failed`. A record with no session (an older one, or a fresh
+is `"warning": "record_not_written"` on a started agent, never `failed`, and
+a sound tag that didn't take is `"warning": "sound_not_set"` (the `sound` field
+is then what was asked for, not what the pane has). A record with no session (an older one, or a fresh
 start herdr didn't name) is offered by `list` and `orphans` as
 `bowery resume <name> --fresh`, and with `--gated|--ungated` when it's too old
 to say how it was started.

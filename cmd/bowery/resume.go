@@ -209,9 +209,9 @@ func resumeOne(name string, o resumeOpts) error {
 	}
 	if held {
 		if o.ifDead {
-			return &skipped{"busy", "another resume, dispatch or done of it is running"}
+			return &skipped{"busy", "another resume, dispatch, adopt or done of it is running"}
 		}
-		return refuse("another resume, dispatch or done of %s is running", name)
+		return refuse("another resume, dispatch, adopt or done of %s is running", name)
 	}
 	defer unlock()
 	if r := loadRecord(name); r != nil {
@@ -446,7 +446,11 @@ func resumeOne(name string, o resumeOpts) error {
 	case "workspace":
 		rec.Placement, rec.CreatedPane, rec.Owns = "workspace", true, &Owns{Kind: "workspace", ID: p.WorkspaceID}
 	}
-	rec.Cwd, rec.Gated, rec.Launcher = cwd, gated, launcher
+	// --ungated over a record that says --gated is for this start only: the
+	// record keeps the seat gated, so the next plain resume is too. (A
+	// record older than 0.3.0 says nothing, so the mode given is kept.)
+	keepGated := rec.Gated && rec.Cwd != "" && !gated
+	rec.Cwd, rec.Gated, rec.Launcher = cwd, gated || keepGated, launcher
 	rec.Resumed, rec.Resumes = nowISO(), rec.Resumes+1
 	var warnings []string
 	recorded := true
@@ -543,6 +547,7 @@ func resumeOne(name string, o resumeOpts) error {
 	}
 	if err := setSound(pane, sound); err != nil {
 		warn("%s is running again in %s, but tagging its sound failed: %v (bowery mute|unmute %s)", name, p.PaneID, herdrMsg(err), name)
+		warnings = append(warnings, "sound_not_set")
 	}
 	// The first prompt is why it's up (the notice, and the caller's reason):
 	// one that never arrives leaves a seat sitting idle, so it's taken back,
@@ -662,10 +667,10 @@ func parseStamp(s string) (time.Time, bool) {
 	return time.Time{}, false
 }
 
-// nameLock takes the lock on a name, per server, without waiting: resume
-// and dispatch hold it while they check and change that agent (done
-// doesn't yet). held
-// is true when another of them has it. Lock files live in the state dir's
+// nameLock takes the lock on a name, per server, without waiting: resume,
+// dispatch, adopt and done hold it while they check and change that agent,
+// and list or watch for the instant they write a session. held is true
+// when another of them has it. Lock files live in the state dir's
 // locks/ folder and stay there (removing one would race a waiter).
 func nameLock(name string) (unlock func(), held bool, err error) {
 	return lockName(name, true)
@@ -753,7 +758,11 @@ func planLanding(rec *Record, o resumeOpts, ags []Agent, ps []Pane, all []Worksp
 					return landing{}, refuse("%s's pane %s now holds %s; not starting it in someone else's pane", rec.Name, p.PaneID, who)
 				}
 			}
-			if !paneIsBlankShell(p) {
+			blank, err := paneBlankShell(p)
+			if err != nil {
+				return landing{}, fail("can't tell whether %s's pane %s is at a shell prompt: %v", rec.Name, p.PaneID, herdrMsg(err))
+			}
+			if !blank {
 				return landing{}, refuse("%s's pane %s is running %s, not sitting at a shell prompt; stop it, or close the pane",
 					rec.Name, p.PaneID, paneDesc(p))
 			}
@@ -824,6 +833,9 @@ func resumable(r *Record) (bool, error) {
 	}
 	if cwd == "" {
 		return false, nil
+	}
+	if identityStill(r) != nil {
+		return false, nil // resume would refuse: it would start as the wrong person
 	}
 	// As resume would look: as the agent's identity, which may see what
 	// the caller of list or orphans can't (or not see what it can).

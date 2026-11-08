@@ -4,6 +4,7 @@
 """
 
 import datetime
+from pathlib import Path
 import json
 import os
 import shutil
@@ -177,6 +178,36 @@ class Resume(Bed):
         self.refused("could not answer", "orphans", env=env)
         self.refused("could not answer", "done", "hic", env=env)
         self.assertIsNotNone(self.record("hic"))
+
+    def test_ungated_on_a_gated_record_is_for_that_start_only(self):
+        self.dispatch("gate", "--cwd", self.repo, "--gated")
+        self.kill("gate")
+        self.resume("gate", "--ungated")
+        self.assertIn("--dangerously-skip-permissions", self.agent("gate")["args"])
+        self.assertTrue(self.record("gate").get("gated"), "the record stays gated")
+        self.kill("gate")
+        self.resume("gate")
+        self.assertNotIn("--dangerously-skip-permissions", self.agent("gate")["args"])
+
+    def test_a_timeout_past_a_day_is_refused(self):
+        self.dispatch("long", "--cwd", self.repo)
+        self.kill("long")
+        self.refused("from 1 to 86400000", "resume", "long", "--timeout", "9223372036854775")
+        self.refused("from 1 to 86400000", "dispatch", "long2", "--cwd", self.repo, "--timeout", "86400001")
+        self.assertEqual(self.records("long2"), [])
+
+    def test_a_herdr_failure_on_the_pane_is_not_a_busy_pane(self):
+        self.dispatch("shellq", "--cwd", self.repo)
+        self.exit_to_shell("shellq")
+        out = self.refused("can't tell whether shellq's pane", "resume", "shellq", env={"FAKE_PROCESS_INFO_FAIL": "1"})
+        self.assertNotIn("not sitting at a shell prompt", out)
+
+    def test_a_sound_tag_that_failed_is_in_the_json(self):
+        self.dispatch("snd", "--cwd", self.repo)
+        self.kill("snd")
+        rc, got = self.json_of("snd", "--json", env={"FAKE_METADATA_FAIL": "1"})
+        self.assertEqual((rc, got["outcome"]), (0, "resumed"))
+        self.assertIn("sound_not_set", got.get("warning", ""))
 
     def test_a_prompt_follows_the_notice_and_the_flags_carry_over(self):
         self.dispatch("flags", "--cwd", self.repo, "--gated", "--model", "opus")
@@ -601,7 +632,7 @@ class Resume(Bed):
         self.kill("racy")
         with self.lock("racy"):
             snap = self.unchanged("racy")
-            self.refused("another resume, dispatch or done of racy is running", "resume", "racy")
+            self.refused("another resume, dispatch, adopt or done of racy is running", "resume", "racy")
             self.assertIn("nothing to do", self.ok("resume", "racy", "--if-dead"))
             self.refused("of racy is running", "dispatch", "racy", "--cwd", self.repo)
             self.assertEqual(self.unchanged("racy"), snap)
@@ -612,9 +643,12 @@ class Resume(Bed):
 
     def test_done_waits_its_turn_on_a_name(self):
         a = self.dispatch("held", "--worktree", "held", "--cwd", self.repo)
+        sub = Path(a["worktree"]) / "src"
+        sub.mkdir()
         with self.lock("held"):
             snap = self.unchanged("held")
-            for target in ("held", a["pane_id"], a["worktree"]):
+            # A subfolder of the worktree is that worktree's done: locked too.
+            for target in ("held", a["pane_id"], a["worktree"], str(sub)):
                 self.refused("of held is running", "done", target, "--force")
             self.assertEqual(self.unchanged("held"), snap)
             self.assertIsNotNone(self.agent("held"))
@@ -629,6 +663,14 @@ class Resume(Bed):
             self.records("mid")[0].unlink()
             self.refused("of mid is running", "done", "mid", "--force")
             self.assertIsNotNone(self.agent("mid"))
+
+    def test_done_refuses_a_target_that_changed_while_it_locked(self):
+        a = self.dispatch("ch", "--cwd", self.repo)
+        # The second look (after the locks) finds the agent in that pane
+        # renamed: it now reaches a different agent than the one locked.
+        out = self.refused("changed while it was being checked", "done", a["pane_id"], "--force",
+                           env={"FAKE_RENAME_ON_LIST": "2:ch:ch2"})
+        self.assertIsNotNone(self.record("ch"))
 
     def test_done_of_a_typo_leaves_no_lock_behind(self):
         self.dispatch("real", "--cwd", self.repo)
@@ -1140,6 +1182,18 @@ class RemoteResume(Resume.__base__):
             next(p for p in s["panes"] if p["pane_id"] == rec["pane_id"])["pid"] = proc.pid
         self.refused("carrying OTHER_TOOL_TAG", "resume", "bx")
         self.assertIn("/proc/", self.ssh_log(), "read over ssh")
+
+    def test_an_environment_it_cannot_read_on_the_box_is_refused(self):
+        self.add_box(extra='')
+        self.config.write_text(self.config.read_text().replace(f"[machines.{BOX}]",
+                               f'hands_off_env = ["OTHER_TOOL_TAG"]\n[machines.{BOX}]'))
+        self.dispatch("bz", "--machine", BOX, "--as", "alice", "--cwd", "~/dev/app")
+        rec = json.loads(self.records("bz")[0].read_text())
+        self.exit_to_shell("bz", BOX)
+        with self.mutate(BOX) as s:  # a pid that is gone by the time it's read
+            next(p for p in s["panes"] if p["pane_id"] == rec["pane_id"])["pid"] = 4194000
+        self.refused("can't read the environment of pid 4194000", "resume", "bz")
+        self.assertIsNone(self.agent("bz", BOX))
 
     exit_to_shell = Resume.exit_to_shell
 

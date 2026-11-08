@@ -666,9 +666,17 @@ func doneNames(target string) ([]string, error) {
 		}
 	}
 	if strings.Contains(target, "/") {
+		// By the worktree it's in, as doneOne resolves it: a subfolder of
+		// one is that worktree's done.
+		top := target
+		if info, err := worktreeInfo(target); err != nil {
+			return nil, err
+		} else if info != nil {
+			top = norm(info.top)
+		}
 		for _, r := range allRecords() {
 			for _, w := range recWorktrees(r) {
-				if norm(w.Path) == target {
+				if norm(w.Path) == top {
 					add(r.Name)
 				}
 			}
@@ -723,7 +731,7 @@ func doneLocks(target string) (func(), error) {
 		}
 		if busy {
 			release()
-			return nil, refuse("a resume, dispatch or adopt of %s is running; try again when it has finished", n)
+			return nil, refuse("a resume, dispatch, adopt or done of %s is running; try again when it has finished", n)
 		}
 		held = append(held, unlock)
 	}
@@ -746,7 +754,8 @@ const adoptUsage = "adopt <name> [--launcher CMD] [--gated|--ungated] [--machine
 // what resume needs to bring it back (its session and folder, the launcher
 // and permission mode given). Everything is checked before the record is
 // written, and only then is anything said. It takes the agent's name lock
-// (so it waits for no one: a resume or dispatch under way refuses it).
+// (so it waits for no one: a resume, dispatch, adopt or done under way
+// refuses it).
 func cmdAdopt(argv []string) {
 	explicit, argv := popMachine(argv)
 	var name, launcher, gated string
@@ -795,7 +804,7 @@ func cmdAdopt(argv []string) {
 		die("adopt: %v", err)
 	}
 	if held {
-		die("adopt %s: refused, nothing changed: a resume or dispatch of %s is running", name, name)
+		die("adopt %s: refused, nothing changed: a resume, dispatch, adopt or done of %s is running", name, name)
 	}
 	defer unlock()
 

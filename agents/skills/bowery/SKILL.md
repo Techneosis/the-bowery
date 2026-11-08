@@ -190,18 +190,22 @@ Then wait on it and `done` it as usual.
 
 It refuses, changing nothing, while the agent or its session is alive; when
 its record has no session or directory (an older dispatch never seen alive
-since); for a non-claude agent; when its directory or a worktree is gone; when
+since: `bowery resume <name> --fresh`, or `bowery adopt <name> --gated|--ungated`
+while that agent is still alive in its own pane, which fills both from it);
+when its recorded launcher isn't one plain command line (`--launcher CMD` or
+`--no-launcher`); for a non-claude agent; when its directory or a worktree is gone; when
 the pane it would use holds someone else's agent, a running process or another
 tool's marker (`hands_off_env`); when its `--as` no longer matches the config;
 and with `--swarm`/`--workspace` while its old tab is still open. A record
 from before 0.3.0 doesn't say whether the agent was gated: pass `--gated` or
-`--ungated`. `bowery orphans` marks dead agents that can be resumed with
+`--ungated`. `--ungated` on a gated record is for that start only.
+`bowery orphans` marks dead agents that can be resumed with
 `(bowery resume <name>; done ends that)`, and `bowery list` shows them as
 `gone ... bowery resume <name>`.
 
 **`done` ends a resume.** `done <name>` drops the record and its session, and
-`done <path>` on its worktree removes the worktree resume needs. Resume first
-if the work isn't finished.
+`done <path>` on its worktree removes the worktree resume needs (and drops the
+record of an agent that ran in it). Resume first if the work isn't finished.
 
 **From a hook or a job** (start a seat when mail comes):
 `bowery resume <name> --if-dead --not-within 10m -- "<why>"`. `--if-dead`
