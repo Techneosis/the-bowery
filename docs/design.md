@@ -266,10 +266,12 @@ to say how it was started.
 can use: its session from herdr, the folder its claude runs in (the pane's
 foreground folder, not where the shell has moved to), and the launcher and
 permission mode given. One of `--gated`/`--ungated` is required for a new
-record, and for an old one with no folder of its own, since bowery can't see
-how a hand-started claude was launched. On an existing record they set or
-change the mode and `--launcher` the launcher; an old record missing its
-session or folder has them filled from its live agent. Everything is checked
+record, since bowery can't see how a hand-started claude was launched. On an
+existing record they set or change the mode and `--launcher` the launcher.
+An existing record that lacks a session or a folder of its own isn't filled
+in from a live agent (yet): telling which conversation is really its own
+takes more than a name, so it's refused ("bowery done X, then adopt it").
+Everything is checked
 before the record is written: no session reported, two live agents of the
 name, a bad name or path are refused with nothing written or said. Nothing
 restarts. Paths starting with `-` go after `--`.

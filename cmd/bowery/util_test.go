@@ -3,7 +3,6 @@ package main
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -64,8 +63,8 @@ func TestControlDirIsShortEnoughForASocket(t *testing.T) {
 	// hex, then ssh's ".<16 random>" temporary suffix. It must fit macOS's
 	// 104 bytes (103 usable).
 	fits := func(d string) bool { return len(d)+len("/bowery-ssh-")+40+17 <= 103 }
-	if !fits(strings.Repeat("x", maxControlDir)) || fits(strings.Repeat("x", maxControlDir+1)) {
-		t.Fatalf("maxControlDir %d is not the boundary", maxControlDir)
+	if maxControlDir != 34 {
+		t.Fatalf("maxControlDir is %d; 103 usable bytes less ssh's 69 is 34", maxControlDir)
 	}
 	private := func() string {
 		d := t.TempDir()
@@ -86,13 +85,17 @@ func TestControlDirIsShortEnoughForASocket(t *testing.T) {
 	if got := controlDir(); got != d {
 		t.Errorf("a short private XDG_RUNTIME_DIR is used, got %q", got)
 	}
-	os.Chmod(d, 0o755)
+	if err := os.Chmod(d, 0o755); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
 	if got := controlDir(); got == d {
 		t.Errorf("a folder others can read isn't used")
 	}
 	os.Chmod(d, 0o700)
 	link := d + "-link"
-	os.Symlink(d, link)
+	if err := os.Symlink(d, link); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
 	t.Cleanup(func() { os.Remove(link) })
 	t.Setenv("XDG_RUNTIME_DIR", link)
 	if got := controlDir(); got == link {

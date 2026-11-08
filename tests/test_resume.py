@@ -861,19 +861,28 @@ class Resume(Bed):
         self.ok("adopt", "where", "--ungated")
         self.assertEqual(self.record("where")["cwd"], str(self.repo))
 
-    def test_adopt_makes_an_old_record_resumable_from_its_live_agent(self):
+    def test_adopt_wont_fill_in_an_old_record(self):
         self.dispatch("elder", "--cwd", self.repo)
         f = self.records("elder")[0]
         rec = json.loads(f.read_text())
         for k in ("session", "cwd", "gated", "model"):
             rec.pop(k, None)
         f.write_text(json.dumps(rec))
-        self.refused("--gated (permission prompts on) or --ungated", "adopt", "elder", "--launcher", "x")
-        self.ok("adopt", "elder", "--ungated")
-        rec = self.record("elder")
-        self.assertEqual((rec["session"], rec["cwd"]), (self.agent("elder")["session"], str(self.repo)))
-        self.kill("elder")
-        self.resume("elder")
+        before = f.read_text()
+        self.refused("which adopt doesn't fill in; bowery done elder", "adopt", "elder", "--ungated")
+        self.assertEqual(f.read_text(), before, "nothing written")
+        rec["cwd"] = str(self.repo)  # a folder, but no session
+        f.write_text(json.dumps(rec))
+        self.refused("its record has no session, which adopt doesn't fill in", "adopt", "elder", "--ungated")
+
+    def test_adopt_takes_paths_after_double_dash(self):
+        self.dispatch("dd", "--cwd", self.repo)
+        w = self.wt / "repo" / "--odd"
+        sh("git", "-C", self.repo, "worktree", "add", "-q", "-b", "odd", str(w), "origin/main")
+        self.ok("adopt", "dd", "--", str(w))
+        self.assertIn(str(w), [x["path"] for x in self.record("dd")["worktrees"]])
+        # --machine after -- is a path, not the option.
+        self.refused("adopt:", "adopt", "dd", "--", "--machine")
 
     def test_adopt_sets_a_launcher_on_an_existing_record(self):
         seat = self.launcher()

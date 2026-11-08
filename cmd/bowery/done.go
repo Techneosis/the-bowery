@@ -724,6 +724,7 @@ func cmdAdopt(argv []string) {
 			}
 		}
 	}
+	fresh := rec == nil // a record adopt writes new, from the live agent
 	if rec == nil {
 		if live == nil {
 			die("adopt: no dispatch record and no live agent named %s", name)
@@ -745,19 +746,25 @@ func cmdAdopt(argv []string) {
 	}
 	var said []string
 	if forResume {
-		if rec.Kind != "" && rec.Kind != "claude" {
-			die("adopt: --launcher and --gated|--ungated are for claude agents (%s is %s)", name, rec.Kind)
+		if rec.Kind != "claude" && !(fresh && rec.Kind == "") {
+			die("adopt: --launcher and --gated|--ungated are for claude agents (%s is %q)", name, rec.Kind)
 		}
-		// What resume needs: a session, the folder claude filed it under, and
-		// how it was started. A record without a folder of its own is from
-		// before bowery knew how it started, so its mode must be said too.
-		if rec.Session == "" || rec.Cwd == "" {
-			if live == nil {
-				die("adopt %s: refused, nothing changed: its record has no session or folder, and no live agent of that name to read them from", name)
+		// An existing record that lacks a session or a folder isn't filled in
+		// here (yet): which live conversation is really its own takes more
+		// than a name. A record adopt writes new is the agent's own, whole.
+		if !fresh && (rec.Session == "" || rec.Cwd == "") {
+			missing := "session"
+			switch {
+			case rec.Session == "" && rec.Cwd == "":
+				missing = "session and no folder of its own"
+			case rec.Cwd == "":
+				missing = "folder of its own (an older record)"
 			}
-			if gated == "" {
-				die("adopt %s: say how it was started: --gated (permission prompts on) or --ungated", name)
-			}
+			die("adopt %s: refused, nothing changed: its record has no %s, which adopt doesn't fill in; "+
+				"bowery done %s (if it's finished with its worktrees), then adopt it", name, missing, name)
+		}
+		if fresh && gated == "" {
+			die("adopt %s: say how it was started: --gated (permission prompts on) or --ungated", name)
 		}
 		if rec.Session == "" {
 			s := live.SessionID()

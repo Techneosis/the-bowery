@@ -285,6 +285,9 @@ func nowISO() string { return time.Now().UTC().Format("2006-01-02T15:04:05+00:00
 // popMachine strips `--machine <label>` out of a subcommand's arguments.
 func popMachine(argv []string) (string, []string) {
 	for i, a := range argv {
+		if a == "--" {
+			break // what follows is a prompt or paths, never an option
+		}
 		if a == "--machine" {
 			if i+1 >= len(argv) {
 				die("--machine needs a value")

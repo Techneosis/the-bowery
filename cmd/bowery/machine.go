@@ -141,14 +141,33 @@ func controlDir() string {
 }
 
 // privateDir: a real folder (Lstat, so a symlink isn't followed), mode 0700,
-// owned by this user.
+// owned by this user, under ancestors nobody else can swap it out of: each
+// a real folder owned by root or us, and not writable by others unless
+// sticky (as /tmp is).
 func privateDir(d string) bool {
 	st, err := os.Lstat(d)
 	if err != nil || !st.IsDir() || st.Mode().Perm() != 0o700 {
 		return false
 	}
-	sys, ok := st.Sys().(*syscall.Stat_t)
-	return ok && int(sys.Uid) == os.Getuid()
+	if sys, ok := st.Sys().(*syscall.Stat_t); !ok || int(sys.Uid) != os.Getuid() {
+		return false
+	}
+	for p := filepath.Dir(filepath.Clean(d)); ; p = filepath.Dir(p) {
+		ps, err := os.Lstat(p)
+		if err != nil || !ps.IsDir() {
+			return false
+		}
+		sys, ok := ps.Sys().(*syscall.Stat_t)
+		if !ok || (sys.Uid != 0 && int(sys.Uid) != os.Getuid()) {
+			return false
+		}
+		if ps.Mode().Perm()&0o002 != 0 && ps.Mode()&os.ModeSticky == 0 {
+			return false
+		}
+		if p == "/" {
+			return true
+		}
+	}
 }
 
 func sshRun(host, script string) (int, string, error) {
