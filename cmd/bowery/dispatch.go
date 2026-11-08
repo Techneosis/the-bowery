@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -85,6 +86,7 @@ func parseStart(argv []string) startOpts {
 			die("unknown option %s", a)
 		}
 	}
+	o.timeout = timeoutArg(o.timeout)
 	if o.base != "" && o.branch == "" {
 		die("--base only goes with --worktree")
 	}
@@ -466,8 +468,7 @@ func startAgent(name string, o startOpts, from, here string, agentArgs []string,
 
 	// A fresh pane exists before its shell is ready; agent start refuses it
 	// with agent_pane_busy until then. Retry that one error only.
-	timeoutMS := 60000
-	fmt.Sscan(o.timeout, &timeoutMS)
+	timeoutMS, _ := strconv.Atoi(o.timeout) // checked by timeoutArg
 	if o.launcher != "" {
 		return pane, launchAgent(name, pane, o.launcher, agentArgs, timeoutMS, m)
 	}

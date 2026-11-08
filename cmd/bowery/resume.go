@@ -7,7 +7,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -125,10 +124,7 @@ func cmdResume(argv []string) {
 			if i+1 >= len(argv) {
 				die("--timeout needs a value")
 			}
-			if n, err := strconv.Atoi(argv[i+1]); err != nil || n <= 0 {
-				die("--timeout takes milliseconds, a whole number above 0 (got '%s')", argv[i+1])
-			}
-			o.timeout = argv[i+1]
+			o.timeout = timeoutArg(argv[i+1])
 			i++
 		default:
 			if strings.HasPrefix(a, "--launcher=") {

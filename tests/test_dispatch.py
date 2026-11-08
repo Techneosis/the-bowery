@@ -591,6 +591,13 @@ class LocalIdentity(Bed):
         self.config.write_text("")
         self.refused("no identity_command", "dispatch", "x", "--as", "alice", "--cwd", self.repo)
 
+    def test_a_bad_timeout_is_refused_before_anything(self):
+        # It used to fall back to 60s on a word it couldn't read, and hand
+        # herdr the word anyway.
+        for bad in ("10s", "0", "-5", "abc"):
+            self.refused("milliseconds", "dispatch", "t", "--cwd", self.repo, "--timeout", bad)
+        self.assertEqual(self.records("t"), [])
+        self.assertEqual(self.ws_labels(), [])
 
 if __name__ == "__main__":
     unittest.main()
