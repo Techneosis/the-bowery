@@ -739,8 +739,12 @@ func planLanding(rec *Record, o resumeOpts, ags []Agent, ps []Pane, all []Worksp
 			return landing{placement: "pane", pane: p.PaneID, why: "its own pane " + p.PaneID}, nil
 		}
 	}
+	c, err := ownedContainer(rec, ps, all)
+	if err != nil {
+		return landing{}, err
+	}
 	if o.placement != "" {
-		if c := ownedContainer(rec, ps, all); c != nil {
+		if c != nil {
 			return landing{}, refuse("%s's %s %s is still open; resume without --%s to come back there, "+
 				"or close it first (a new one would leave it owned by nothing)", rec.Name, c.kind, c.id, o.placement)
 		}
@@ -752,7 +756,7 @@ func planLanding(rec *Record, o resumeOpts, ags []Agent, ps []Pane, all []Worksp
 		}
 	}
 	if o.placement == "" {
-		if c := ownedContainer(rec, ps, all); c != nil && len(c.panes) > 0 {
+		if c != nil && len(c.panes) > 0 {
 			return landing{placement: "split", pane: c.panes[0].PaneID,
 				why: fmt.Sprintf("a new pane in its %s %s", c.kind, c.id)}, nil
 		}

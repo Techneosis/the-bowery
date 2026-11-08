@@ -88,10 +88,12 @@ type container struct {
 // ownedContainer is the tab/workspace bowery made for rec's agent, if it is
 // still open. Checked by label as well as id, so a tab someone renamed or an
 // id herdr reused is never taken for it.
-func ownedContainer(rec *Record, ps []Pane, all []Workspace) *container {
+// An error is herdr failing to answer; a tab that is gone is (nil, nil), so a
+// passing hiccup never reads as "its tab is closed".
+func ownedContainer(rec *Record, ps []Pane, all []Workspace) (*container, error) {
 	o := recOwns(rec)
 	if o == nil {
-		return nil
+		return nil, nil
 	}
 	wsByID := func(id string) *Workspace {
 		for i := range all {
@@ -104,7 +106,7 @@ func ownedContainer(rec *Record, ps []Pane, all []Workspace) *container {
 	if o.Kind == "workspace" {
 		ws := wsByID(o.ID)
 		if ws == nil || ws.Label != rec.Name {
-			return nil
+			return nil, nil
 		}
 		c := &container{kind: "workspace", id: ws.WorkspaceID, label: ws.Label, ws: *ws}
 		for _, p := range ps {
@@ -112,15 +114,22 @@ func ownedContainer(rec *Record, ps []Pane, all []Workspace) *container {
 				c.panes = append(c.panes, p)
 			}
 		}
-		return c
+		return c, nil
 	}
 	var r struct{ Tab Tab }
-	if herdr(&r, "tab", "get", o.ID) != nil || r.Tab.Label != rec.Name {
-		return nil
+	if err := herdr(&r, "tab", "get", o.ID); err != nil {
+		var he *HerdrError
+		if errors.As(err, &he) && he.Code == "tab_not_found" {
+			return nil, nil
+		}
+		return nil, fail("herdr tab get %s: %v", o.ID, err)
+	}
+	if r.Tab.Label != rec.Name {
+		return nil, nil
 	}
 	ws := wsByID(r.Tab.WorkspaceID)
 	if ws == nil {
-		return nil
+		return nil, nil
 	}
 	c := &container{kind: "tab", id: r.Tab.TabID, label: r.Tab.Label, ws: *ws}
 	for _, p := range ps {
@@ -128,7 +137,7 @@ func ownedContainer(rec *Record, ps []Pane, all []Workspace) *container {
 			c.panes = append(c.panes, p)
 		}
 	}
-	return c
+	return c, nil
 }
 
 func paneDesc(p Pane) string {
@@ -216,7 +225,9 @@ func doneOne(target string, o doneOpts) error {
 	}
 	var cont *container
 	if rec != nil {
-		cont = ownedContainer(rec, ps, all)
+		if cont, err = ownedContainer(rec, ps, all); err != nil {
+			return err
+		}
 	}
 	if !isPath && rec == nil && agent == nil && pane == nil {
 		say("%s: nothing to tear down (no live agent, pane or dispatch record)", target)

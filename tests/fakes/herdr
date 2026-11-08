@@ -240,6 +240,8 @@ def run(s, argv):
             save(s)
             out(cid, {"type": "tab_created", "tab": tab_view(s, t), "root_pane": pane_view(s, p)})
         if verb in ("get", "close"):
+            if verb == "get" and os.environ.get("FAKE_TAB_GET_FAIL") == "1":
+                err(cid, "internal_error", "the server could not answer")
             t = s["tabs"].get(args[0])
             if not t:
                 err(cid, "tab_not_found", f"tab {args[0]} not found")

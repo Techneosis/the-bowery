@@ -160,6 +160,23 @@ class Resume(Bed):
         self.assertIsNotNone(self.pane(shell["pane_id"]))
         self.assertEqual(self.record("inside")["owns"], {"kind": "tab", "id": a["tab_id"]})
 
+    def test_herdr_failing_to_answer_is_not_a_closed_tab(self):
+        # A hiccup on `tab get` used to read as "its tab is gone": the resume
+        # then opened a second tab beside the old one, and orphans lost it.
+        self.dispatch("keep", "--cwd", self.repo)
+        a = self.dispatch("hic", "--cwd", self.repo)
+        self.split_off(a["pane_id"])
+        self.herdr("pane", "close", a["pane_id"])
+        snap = self.unchanged("hic")
+        env = {"FAKE_TAB_GET_FAIL": "1"}
+        self.refused("could not answer", "resume", "hic", env=env)
+        self.refused("could not answer", "resume", "hic", "--swarm", env=env)
+        self.assertEqual(self.unchanged("hic"), snap)
+        self.assertEqual(self.tab_labels(self.swarm()["workspace_id"]), ["keep", "hic"], "no second tab")
+        self.refused("could not answer", "orphans", env=env)
+        self.refused("could not answer", "done", "hic", env=env)
+        self.assertIsNotNone(self.record("hic"))
+
     def test_a_prompt_follows_the_notice_and_the_flags_carry_over(self):
         self.dispatch("flags", "--cwd", self.repo, "--gated", "--model", "opus")
         self.kill("flags")

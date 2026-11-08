@@ -241,7 +241,11 @@ func findOrphans() ([]orphan, error) {
 			out = append(out, rec)
 			continue
 		}
-		if c := ownedContainer(r, ps, all); c != nil {
+		c, err := ownedContainer(r, ps, all)
+		if err != nil {
+			return nil, err
+		}
+		if c != nil {
 			rec.Note = fmt.Sprintf("agent gone, its %s %s still open with %d pane(s)", c.kind, c.id, len(c.panes))
 			rec.line = name + ": " + rec.Note + hint
 			out = append(out, rec)
