@@ -797,6 +797,11 @@ class Resume(Bed):
             self.assertEqual((got["outcome"], got["name"]), ("refused", "js"), bad)
         rc, got = self.json_of("--json")
         self.assertEqual(got["outcome"], "refused")
+        # A bad first word is the name refused, not a later word or nothing.
+        rc, got = self.json_of("Foo", "--json")
+        self.assertEqual((got["name"], got["outcome"]), ("Foo", "refused"))
+        rc, got = self.json_of("Foo", "js", "--json")
+        self.assertEqual((got["name"], got["outcome"]), ("Foo", "refused"))
 
     def test_fresh_refuses_a_launcher_that_resumes(self):
         self.dispatch("fr", "--cwd", self.repo)

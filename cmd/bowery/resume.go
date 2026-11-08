@@ -45,6 +45,7 @@ const resumeUsage = "bowery resume <name> [--swarm|--workspace] [--gated|--ungat
 // the name: the first word that isn't an option or an option's value.
 func resumeJSONScan(argv []string) {
 	valued := map[string]bool{"--launcher": true, "--not-within": true, "--timeout": true, "--machine": true}
+	seen := false
 	for i := 0; i < len(argv); i++ {
 		a := argv[i]
 		if a == "--" {
@@ -56,8 +57,10 @@ func resumeJSONScan(argv []string) {
 		case valued[a]:
 			i++
 		case strings.HasPrefix(a, "-"):
-		case jsonOnce.name == "" && nameRE.MatchString(a):
-			jsonOnce.name = a
+		case !seen:
+			// The word cmdResume takes as the name, valid or not: a refusal
+			// of "Foo" names Foo, never a later word or nothing.
+			jsonOnce.name, seen = a, true
 		}
 	}
 }
