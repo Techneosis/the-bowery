@@ -193,6 +193,28 @@ class Remote(Bed):
         self.assertIn("(no record here: maybe another dispatcher's)", out)
         self.assertIn("mine", self.ok("orphans", "--machine", BOX))
 
+    def test_orphans_check_a_gone_agent_as_its_identity(self):
+        # resume looks at the agent's directory as its identity; orphans and
+        # list must ask the same question, or they offer a resume that fails.
+        far = self.dispatch("far", "--machine", BOX, "--as", "alice", "--worktree", "far", "--cwd", "~/dev/app")
+        self.herdr("tab", "close", far["tab_id"], machine=BOX)
+        (self.box / "as.log").write_text("")
+        out = self.ok("orphans")
+        self.assertIn("bowery resume far", out)
+        self.assertIn(f"alice\tsh -c if test -d {far['worktree']}", (self.box / "as.log").read_text())
+
+    def test_a_failing_find_on_the_box_is_not_no_worktrees(self):
+        self.dispatch("far", "--machine", BOX, "--as", "alice", "--cwd", "~/dev/app")
+        root = self.box / ".herdr" / "worktrees"
+        root.mkdir(parents=True, exist_ok=True)
+        root.chmod(0)
+        try:
+            out = self.ok("orphans")
+        finally:
+            root.chmod(0o755)
+        self.assertIn(f"{BOX}", out)
+        self.assertIn("find under", out)
+
     def test_a_worktree_path_on_the_box_needs_machine(self):
         loose = self.box / ".herdr" / "worktrees" / "app" / "loose"
         loose.parent.mkdir(parents=True)

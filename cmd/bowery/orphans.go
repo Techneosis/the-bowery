@@ -38,9 +38,14 @@ type orphan struct {
 func checkoutsUnder(root string) ([]string, error) {
 	if machine != "" { // <root>/<repo>/<branch>/.git, as dispatch makes them
 		// Plain -print: -printf is GNU-only, and the box may be a Mac.
-		rc, out, err := sshSh("find " + shq(root) + " -mindepth 2 -maxdepth 3 -name .git -print")
-		if err != nil || rc != 0 {
+		// No root is no checkouts; a find that fails on one that is there is
+		// an error, never "none".
+		rc, out, err := sshSh("[ -d " + shq(root) + " ] || exit 0; find " + shq(root) + " -mindepth 2 -maxdepth 3 -name .git -print")
+		if err != nil {
 			return nil, err
+		}
+		if rc != 0 {
+			return nil, fail("find under %s on %s failed (exit %d): %s", root, machine, rc, strings.TrimSpace(out))
 		}
 		var found []string
 		for _, l := range strings.Split(out, "\n") {

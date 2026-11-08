@@ -804,6 +804,10 @@ func resumable(r *Record) (bool, error) {
 	if cwd == "" {
 		return false, nil
 	}
+	// As resume would look: as the agent's identity, which may see what
+	// the caller of list or orphans can't (or not see what it can).
+	defer func(was string) { as = was }(as)
+	as = r.As
 	if d, err := isDirAs(cwd); err != nil || !d {
 		return false, err
 	}
