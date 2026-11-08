@@ -115,27 +115,40 @@ func herdrWorktreeDir(text, homeDir string) string {
 	return d
 }
 
-// controlDir is where ssh's control sockets go: a short, private
-// directory. A Unix socket's path is capped (104 bytes on macOS, 108 on
-// Linux), and $TMPDIR can be long enough on its own to pass it, so it's
-// $XDG_RUNTIME_DIR when that's short, else /tmp/bowery-<uid>, made 0700 and
-// checked to be ours. "" means none is safe: ssh then runs without sharing.
+// controlDir is where ssh's control sockets go: a short, private folder.
+// A Unix socket's path is capped (104 bytes on macOS, 103 usable; 108 on
+// Linux), and ssh binds a temporary name before the real one: the folder,
+// "/bowery-ssh-" (12), %C's 40 hex digits, then "." and 16 random
+// characters. That's the folder plus 69, so the folder may be at most
+// maxControlDir bytes. $XDG_RUNTIME_DIR is used when it's that short,
+// absolute and ours; else /tmp/bowery-<uid>, made 0700. Either must be a
+// real folder (not a symlink), mode 0700 and owned by us. "" means none is
+// safe, and ssh then runs without sharing a connection.
+const maxControlDir = 103 - 69
+
 func controlDir() string {
-	if rt := os.Getenv("XDG_RUNTIME_DIR"); rt != "" && len(rt) <= 50 {
+	if rt := os.Getenv("XDG_RUNTIME_DIR"); rt != "" && len(rt) <= maxControlDir && filepath.IsAbs(rt) && privateDir(rt) {
 		return rt
 	}
 	d := fmt.Sprintf("/tmp/bowery-%d", os.Getuid())
 	if err := os.Mkdir(d, 0o700); err != nil && !os.IsExist(err) {
 		return ""
 	}
-	st, err := os.Lstat(d)
-	if err != nil || !st.IsDir() || st.Mode().Perm() != 0o700 {
+	if len(d) > maxControlDir || !privateDir(d) {
 		return ""
 	}
-	if sys, ok := st.Sys().(*syscall.Stat_t); !ok || int(sys.Uid) != os.Getuid() {
-		return "" // someone else's: never put our sockets there
-	}
 	return d
+}
+
+// privateDir: a real folder (Lstat, so a symlink isn't followed), mode 0700,
+// owned by this user.
+func privateDir(d string) bool {
+	st, err := os.Lstat(d)
+	if err != nil || !st.IsDir() || st.Mode().Perm() != 0o700 {
+		return false
+	}
+	sys, ok := st.Sys().(*syscall.Stat_t)
+	return ok && int(sys.Uid) == os.Getuid()
 }
 
 func sshRun(host, script string) (int, string, error) {

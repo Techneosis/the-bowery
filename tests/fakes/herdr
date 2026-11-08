@@ -106,9 +106,11 @@ def agent_in(s, pane_id):
 
 def pane_view(s, p):
     v = {k: p[k] for k in ("pane_id", "workspace_id", "tab_id", "terminal_id", "cwd")}
-    v["foreground_cwd"] = p["cwd"]
-    v["terminal_title_stripped"] = p.get("title") or ("sleep" if p.get("busy") else "shell")
     a = agent_in(s, p["pane_id"])
+    # The foreground job's folder: a running agent's own, which can differ
+    # from where the shell is now.
+    v["foreground_cwd"] = (a or {}).get("cwd") or p["cwd"]
+    v["terminal_title_stripped"] = p.get("title") or ("sleep" if p.get("busy") else "shell")
     v["agent_status"] = a["agent_status"] if a else "unknown"
     if a:
         v["agent"] = a["agent"]

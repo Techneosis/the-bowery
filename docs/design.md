@@ -263,10 +263,16 @@ to say how it was started.
 
 **A record for an agent started by hand:** `adopt <name> --launcher CMD
 --ungated` (or `--gated`) gives a live agent with no record one that `resume`
-can use: its session from herdr, its folder from its pane, and the launcher
-and permission mode given, since bowery can't see how a hand-started claude
-was launched (so one of `--gated`/`--ungated` is required). Nothing restarts.
-On an existing record, `--launcher` sets or changes its launcher.
+can use: its session from herdr, the folder its claude runs in (the pane's
+foreground folder, not where the shell has moved to), and the launcher and
+permission mode given. One of `--gated`/`--ungated` is required for a new
+record, and for an old one with no folder of its own, since bowery can't see
+how a hand-started claude was launched. On an existing record they set or
+change the mode and `--launcher` the launcher; an old record missing its
+session or folder has them filled from its live agent. Everything is checked
+before the record is written: no session reported, two live agents of the
+name, a bad name or path are refused with nothing written or said. Nothing
+restarts. Paths starting with `-` go after `--`.
 
 Only a record makes an agent resumable: an agent bowery didn't dispatch (a
 pane another tool started) has none, and is out of reach.

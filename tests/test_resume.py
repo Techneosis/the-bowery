@@ -832,6 +832,49 @@ class Resume(Bed):
         self.assertEqual(a["env"].get("SEAT_BOX"), "box-handy", "back through the adopted launcher")
         self.assertEqual(a["args"], ["--dangerously-skip-permissions", "--resume", sess])
 
+    def test_adopt_checks_everything_before_it_writes(self):
+        p = self.new_workspace("hands", str(self.repo))
+        self.start_by_hand("twin", p["pane_id"])
+        with self.mutate() as s:  # herdr reports no session for it
+            s["agents"]["twin"].pop("session")
+        out = self.refused("herdr reports no session", "adopt", "twin", "--ungated")
+        self.assertNotIn("ungated", out.split("refused")[0], "nothing said before the refusal")
+        self.assertEqual(self.records("twin"), [])
+        with self.mutate() as s:
+            s["agents"]["twin"]["session"] = "s-1"
+        q = self.new_workspace("hands2", str(self.repo))
+        self.start_by_hand("~", q["pane_id"])  # a second agent...
+        with self.mutate() as s:
+            a = s["agents"].pop("~")
+            a["name"] = "twin"
+            s["agents"]["twin-2"] = a  # ...also named twin
+        self.refused("more than one live agent is named twin", "adopt", "twin", "--ungated")
+        self.assertEqual(self.records("twin"), [])
+        self.refused("must be lowercase", "adopt", "../../x", "--ungated")
+        self.assertFalse(any(self.state.rglob("x.*")), "no lock file outside locks/")
+
+    def test_adopt_records_the_folder_claude_runs_in_not_the_shells(self):
+        p = self.new_workspace("cwdtest", str(self.repo))
+        self.start_by_hand("where", p["pane_id"])
+        with self.mutate() as s:  # the shell moved on; claude still runs in repo
+            next(x for x in s["panes"] if x["pane_id"] == p["pane_id"])["cwd"] = str(self.t)
+        self.ok("adopt", "where", "--ungated")
+        self.assertEqual(self.record("where")["cwd"], str(self.repo))
+
+    def test_adopt_makes_an_old_record_resumable_from_its_live_agent(self):
+        self.dispatch("elder", "--cwd", self.repo)
+        f = self.records("elder")[0]
+        rec = json.loads(f.read_text())
+        for k in ("session", "cwd", "gated", "model"):
+            rec.pop(k, None)
+        f.write_text(json.dumps(rec))
+        self.refused("--gated (permission prompts on) or --ungated", "adopt", "elder", "--launcher", "x")
+        self.ok("adopt", "elder", "--ungated")
+        rec = self.record("elder")
+        self.assertEqual((rec["session"], rec["cwd"]), (self.agent("elder")["session"], str(self.repo)))
+        self.kill("elder")
+        self.resume("elder")
+
     def test_adopt_sets_a_launcher_on_an_existing_record(self):
         seat = self.launcher()
         self.dispatch("plainrec", "--cwd", self.repo)

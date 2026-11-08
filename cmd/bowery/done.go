@@ -638,14 +638,28 @@ func cmdDone(argv []string) {
 	os.Exit(rc)
 }
 
-const adoptUsage = "adopt <name> [<worktree-path>...] [--launcher CMD] [--gated|--ungated] [--machine LABEL]"
+const adoptUsage = "adopt <name> [--launcher CMD] [--gated|--ungated] [--machine LABEL] [--] [<worktree-path>...]"
 
+// cmdAdopt records more worktrees as an agent's, and/or gives a live agent
+// what resume needs to bring it back (its session and folder, the launcher
+// and permission mode given). Everything is checked before the record is
+// written, and only then is anything said. It takes the agent's name lock
+// (so it waits for no one: a resume or dispatch under way refuses it).
 func cmdAdopt(argv []string) {
 	explicit, argv := popMachine(argv)
 	var name, launcher, gated string
 	var paths []string
 	for i := 0; i < len(argv); i++ {
 		switch a := argv[i]; {
+		case a == "--":
+			for _, rest := range argv[i+1:] {
+				if name == "" {
+					name = rest
+				} else {
+					paths = append(paths, rest)
+				}
+			}
+			i = len(argv)
 		case a == "--launcher" || strings.HasPrefix(a, "--launcher="):
 			v, used := launcherArg(argv, i)
 			launcher, i = v, i+used
@@ -655,7 +669,7 @@ func cmdAdopt(argv []string) {
 			}
 			gated = a[2:]
 		case strings.HasPrefix(a, "-"):
-			die("adopt: unknown option %s (%s)", a, adoptUsage)
+			die("adopt: unknown option %s (a path starting with - goes after --) (%s)", a, adoptUsage)
 		case name == "":
 			name = a
 		default:
@@ -664,6 +678,9 @@ func cmdAdopt(argv []string) {
 	}
 	if name == "" {
 		die("adopt: which agent? (%s)", adoptUsage)
+	}
+	if !nameRE.MatchString(name) {
+		die("agent name must be lowercase/digits/-/_ (got '%s')", name)
 	}
 	if len(paths) == 0 && launcher == "" && gated == "" {
 		die("adopt: nothing to adopt: give worktree paths, --launcher or --gated|--ungated (%s)", adoptUsage)
@@ -679,46 +696,45 @@ func cmdAdopt(argv []string) {
 		die("adopt %s: refused, nothing changed: a resume or dispatch of %s is running", name, name)
 	}
 	defer unlock()
+
+	// ---- checks; nothing is written until all of them pass
 	rec := loadRecord(name)
-	if rec == nil {
+	forResume := launcher != "" || gated != ""
+	var live *Agent
+	var livePane Pane
+	if rec == nil || forResume {
 		ags, err := agents()
 		if err != nil {
 			die("%v", herdrMsg(err))
 		}
-		var a *Agent
+		var found []string
 		for i := range ags {
 			if ags[i].Name == name {
-				a = &ags[i]
+				live = &ags[i]
+				found = append(found, ags[i].PaneID)
 			}
 		}
-		if a == nil {
+		if len(found) > 1 {
+			die("adopt %s: refused, nothing changed: more than one live agent is named %s (%s); rename all but one first",
+				name, name, strings.Join(found, ", "))
+		}
+		if live != nil {
+			if livePane, err = paneGet(live.PaneID); err != nil {
+				die("%v", herdrMsg(err))
+			}
+		}
+	}
+	if rec == nil {
+		if live == nil {
 			die("adopt: no dispatch record and no live agent named %s", name)
 		}
-		p, err := paneGet(a.PaneID)
-		if err != nil {
-			die("%v", herdrMsg(err))
-		}
-		snd := a.Tokens["sound"]
+		snd := live.Tokens["sound"]
 		if snd == "" {
 			snd = "on"
 		}
 		sock := socketPath()
-		rec = &Record{Name: name, Socket: &sock, Placement: "adopted", Kind: a.Kind, Started: nowISO(),
-			PaneID: p.PaneID, TerminalID: p.TerminalID, WorkspaceID: p.WorkspaceID, TabID: p.TabID, Sound: snd}
-		if (a.Kind == "" || a.Kind == "claude") && (gated != "" || launcher != "") {
-			// What resume needs to bring it back: its conversation, the folder
-			// claude filed it under, and how it was started, which bowery
-			// can't see in a claude started by hand. (Adopting worktrees alone
-			// records none of that, as before: resume then asks.)
-			if gated == "" {
-				die("adopt %s: say how it was started: --gated (permission prompts on) or --ungated", name)
-			}
-			rec.Session = a.SessionID()
-			rec.Cwd = p.Cwd
-			if rec.Cwd == "" {
-				rec.Cwd = a.Cwd
-			}
-		}
+		rec = &Record{Name: name, Socket: &sock, Placement: "adopted", Kind: live.Kind, Started: nowISO(),
+			PaneID: livePane.PaneID, TerminalID: livePane.TerminalID, WorkspaceID: livePane.WorkspaceID, TabID: livePane.TabID, Sound: snd}
 		if machine != "" {
 			r, err := remote()
 			if err != nil {
@@ -727,16 +743,52 @@ func cmdAdopt(argv []string) {
 			rec.Socket, rec.Machine, rec.Host, rec.As = nil, machine, r.host, as
 		}
 	}
-	if launcher != "" {
+	var said []string
+	if forResume {
 		if rec.Kind != "" && rec.Kind != "claude" {
-			die("adopt: --launcher is only for claude agents (%s is %s)", name, rec.Kind)
+			die("adopt: --launcher and --gated|--ungated are for claude agents (%s is %s)", name, rec.Kind)
 		}
-		rec.Launcher = launcher
-		say("%s: launcher %s", name, launcher)
-	}
-	if gated != "" {
-		rec.Gated = gated == "gated"
-		say("%s: %s", name, map[bool]string{true: "gated (permission prompts on)", false: "ungated"}[rec.Gated])
+		// What resume needs: a session, the folder claude filed it under, and
+		// how it was started. A record without a folder of its own is from
+		// before bowery knew how it started, so its mode must be said too.
+		if rec.Session == "" || rec.Cwd == "" {
+			if live == nil {
+				die("adopt %s: refused, nothing changed: its record has no session or folder, and no live agent of that name to read them from", name)
+			}
+			if gated == "" {
+				die("adopt %s: say how it was started: --gated (permission prompts on) or --ungated", name)
+			}
+		}
+		if rec.Session == "" {
+			s := live.SessionID()
+			if s == "" {
+				die("adopt %s: refused, nothing changed: herdr reports no session for it, so resume couldn't use the record", name)
+			}
+			rec.Session = s
+		}
+		if rec.Cwd == "" {
+			// Where the running claude is (what it filed its session under),
+			// not the shell it was started from.
+			rec.Cwd = livePane.ForegroundCwd
+			if rec.Cwd == "" {
+				rec.Cwd = livePane.Cwd
+			}
+			if rec.Cwd == "" {
+				rec.Cwd = live.Cwd
+			}
+			if rec.Cwd == "" {
+				die("adopt %s: refused, nothing changed: herdr doesn't say which folder it runs in", name)
+			}
+		}
+		if launcher != "" {
+			rec.Launcher = launcher
+			said = append(said, "launcher "+launcher)
+		}
+		if gated != "" {
+			rec.Gated = gated == "gated"
+			said = append(said, map[bool]string{true: "gated (permission prompts on)", false: "ungated"}[rec.Gated])
+		}
+		said = append(said, fmt.Sprintf("session %s, in %s: bowery resume %s can bring it back", rec.Session, rec.Cwd, name))
 	}
 	have := recWorktrees(rec)
 	for _, path := range paths {
@@ -751,7 +803,7 @@ func cmdAdopt(argv []string) {
 			}
 		}
 		if dup {
-			say("%s: already has %s", name, w.Path)
+			said = append(said, "already has "+w.Path)
 			continue
 		}
 		have = append(have, w)
@@ -759,10 +811,13 @@ func cmdAdopt(argv []string) {
 		if b == "" {
 			b = "detached"
 		}
-		say("%s: adopted %s [%s]", name, w.Path, b)
+		said = append(said, fmt.Sprintf("adopted %s [%s]", w.Path, b))
 	}
 	rec.Worktrees = have
 	if err := writeRecord(rec); err != nil {
 		die("could not write the dispatch record: %v", err)
+	}
+	for _, l := range said {
+		say("%s: %s", name, l)
 	}
 }

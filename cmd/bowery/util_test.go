@@ -1,6 +1,11 @@
 package main
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
 
 func TestShq(t *testing.T) {
 	for in, want := range map[string]string{
@@ -55,15 +60,50 @@ func TestUnder(t *testing.T) {
 }
 
 func TestControlDirIsShortEnoughForASocket(t *testing.T) {
-	// The longest control socket path ssh will make there: the dir, the
-	// name, and %C's 40 hex digits; it must fit macOS's 104 bytes.
-	fits := func(d string) bool { return len(d)+len("/bowery-ssh-")+40 < 104 }
-	t.Setenv("XDG_RUNTIME_DIR", "/private/tmp/claude-502/-Users-someone-dev-a-long-project-path/0123456789abcdef/scratchpad")
-	if d := controlDir(); d == "" || !fits(d) {
-		t.Errorf("with a long XDG_RUNTIME_DIR, controlDir() = %q", d)
+	// The longest path ssh binds there: the folder, "/bowery-ssh-", %C's 40
+	// hex, then ssh's ".<16 random>" temporary suffix. It must fit macOS's
+	// 104 bytes (103 usable).
+	fits := func(d string) bool { return len(d)+len("/bowery-ssh-")+40+17 <= 103 }
+	if !fits(strings.Repeat("x", maxControlDir)) || fits(strings.Repeat("x", maxControlDir+1)) {
+		t.Fatalf("maxControlDir %d is not the boundary", maxControlDir)
 	}
-	t.Setenv("XDG_RUNTIME_DIR", "/run/user/1000")
-	if d := controlDir(); d != "/run/user/1000" {
-		t.Errorf("a short XDG_RUNTIME_DIR is used as it is, got %q", d)
+	private := func() string {
+		d := t.TempDir()
+		short := filepath.Join("/tmp", filepath.Base(d))
+		if err := os.Symlink(d, short); err != nil {
+			t.Skip("can't make a short folder in /tmp")
+		}
+		t.Cleanup(func() { os.Remove(short) })
+		real := short + "-real"
+		if err := os.Mkdir(real, 0o700); err != nil {
+			t.Skip("can't make a short folder in /tmp")
+		}
+		t.Cleanup(func() { os.Remove(real) })
+		return real
+	}
+	d := private()
+	t.Setenv("XDG_RUNTIME_DIR", d)
+	if got := controlDir(); got != d {
+		t.Errorf("a short private XDG_RUNTIME_DIR is used, got %q", got)
+	}
+	os.Chmod(d, 0o755)
+	if got := controlDir(); got == d {
+		t.Errorf("a folder others can read isn't used")
+	}
+	os.Chmod(d, 0o700)
+	link := d + "-link"
+	os.Symlink(d, link)
+	t.Cleanup(func() { os.Remove(link) })
+	t.Setenv("XDG_RUNTIME_DIR", link)
+	if got := controlDir(); got == link {
+		t.Errorf("a symlink isn't used")
+	}
+	t.Setenv("XDG_RUNTIME_DIR", "relative/dir")
+	if got := controlDir(); got == "relative/dir" {
+		t.Errorf("a relative folder isn't used")
+	}
+	t.Setenv("XDG_RUNTIME_DIR", "/private/tmp/claude-502/-Users-someone-dev-a-long-project-path/scratchpad")
+	if got := controlDir(); got != "" && !fits(got) {
+		t.Errorf("with a long XDG_RUNTIME_DIR, controlDir() = %q, too long", got)
 	}
 }
