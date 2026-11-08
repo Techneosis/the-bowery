@@ -891,6 +891,17 @@ class Resume(Bed):
         self.assertEqual(self.record("plainrec")["launcher"], f"{seat} plainrec")
         self.refused("not the option", "adopt", "plainrec", "--launcher", "--gated")
 
+    def test_an_old_herdr_without_sessions_is_named_as_the_cause(self):
+        old = {"FAKE_NO_SESSIONS": "1"}
+        rc, out = self.bowery("dispatch", "oldh", "--cwd", self.repo, env=old)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("needs 0.9.5 or later", out)
+        p = self.new_workspace("oldhand", str(self.repo))
+        self.start_by_hand("byhand2", p["pane_id"])
+        self.refused("needs 0.9.5 or later", "adopt", "byhand2", "--ungated", env=old)
+        rc, out = self.bowery("dispatch", "newh", "--cwd", self.repo)
+        self.assertNotIn("0.9.5", out, "a herdr that reports sessions isn't blamed")
+
     # ------------------------------------------------------------ orphans and list
 
     def test_orphans_shows_an_agent_that_quit_to_its_shell(self):

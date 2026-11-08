@@ -267,6 +267,9 @@ func cmdDispatch(argv []string) {
 	rec.PaneID, rec.TerminalID, rec.WorkspaceID, rec.TabID = p.PaneID, p.TerminalID, p.WorkspaceID, p.TabID
 	rec.CreatedPane, rec.Sound, rec.Worktrees = m.pane != "", o.sound, also
 	rec.Session = sessionIn(p.PaneID)
+	if rec.Session == "" && o.kind == "claude" {
+		warn("%s's session isn't known yet, so it can be resumed only with --fresh until a list or watch sees it%s", name, oldHerdrNote())
+	}
 	// A tab or workspace bowery made is the agent's: whatever it opens there
 	// later is its to clean up. A --split or --pane sits beside panes that are
 	// not, so there the agent owns only its own pane.

@@ -253,7 +253,7 @@ func resumeOne(name string, o resumeOpts) error {
 	}
 	if rec.Session == "" && !o.fresh {
 		return refuse("%s's record has no session id to resume (an older dispatch never seen alive since, "+
-			"or a --fresh start herdr didn't name); bowery resume %s --fresh starts it in a new conversation", name, name)
+			"or a --fresh start herdr didn't name); bowery resume %s --fresh starts it in a new conversation%s", name, name, oldHerdrNote())
 	}
 	for _, a := range ags {
 		if rec.Session != "" && a.SessionID() == rec.Session {
@@ -517,7 +517,7 @@ func resumeOne(name string, o resumeOpts) error {
 			}
 		}
 	case s == "":
-		warn("couldn't confirm %s's session in %s; the record keeps %q until a list or watch sees it", name, p.PaneID, rec.Session)
+		warn("couldn't confirm %s's session in %s; the record keeps %q until a list or watch sees it%s", name, p.PaneID, rec.Session, oldHerdrNote())
 		warnings = append(warnings, "session_unconfirmed")
 	case o.fresh:
 		left := takeBack()

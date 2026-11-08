@@ -415,3 +415,27 @@ func safeClosePane(paneID string, dryRun bool) (string, error) {
 	}
 	return fmt.Sprintf("closed pane %s and its workspace %s (%s)", paneID, ws.WorkspaceID, ws.Label), nil
 }
+
+// oldHerdrNote is said when herdr reports no agent sessions at all: herdr
+// before 0.9.5 has no agent_session in agent list, and without it bowery
+// can't record, confirm or refresh a claude session. "" when it does report
+// them, or there's no claude agent to tell by.
+func oldHerdrNote() string {
+	ags, err := agents()
+	if err != nil {
+		return ""
+	}
+	claudes := 0
+	for _, a := range ags {
+		if a.Kind == "claude" {
+			claudes++
+			if a.Session != nil {
+				return ""
+			}
+		}
+	}
+	if claudes == 0 {
+		return ""
+	}
+	return " (herdr here reports no agent sessions at all: it needs 0.9.5 or later for bowery to record and check them)"
+}

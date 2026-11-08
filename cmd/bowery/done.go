@@ -769,7 +769,7 @@ func cmdAdopt(argv []string) {
 		if rec.Session == "" {
 			s := live.SessionID()
 			if s == "" {
-				die("adopt %s: refused, nothing changed: herdr reports no session for it, so resume couldn't use the record", name)
+				die("adopt %s: refused, nothing changed: herdr reports no session for it, so resume couldn't use the record%s", name, oldHerdrNote())
 			}
 			rec.Session = s
 		}
