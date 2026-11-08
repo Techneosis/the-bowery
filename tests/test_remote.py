@@ -209,8 +209,21 @@ class Remote(Bed):
         self.assertIn("bowery resume who", self.ok("orphans"))
         conf = self.config.read_text()
         self.config.write_text("\n".join(l for l in conf.splitlines() if not l.startswith("identity_command")) + "\n")
-        self.assertNotIn("bowery resume who", self.ok("orphans"), "resume would refuse it")
+        out = self.ok("orphans")
+        self.assertNotIn("bowery resume who", out, "resume would refuse it")
+        self.assertIn("who: agent gone; resume would refuse it", out, "said, not dropped from the list")
         self.refused("it would start as the wrong person", "resume", "who")
+
+    def test_a_record_blocked_only_by_identity_is_not_nothing_left(self):
+        # No worktree, its folder still there: only the config changed. It
+        # must not read as junk for done to clear (done discards the session).
+        far = self.dispatch("who2", "--machine", BOX, "--as", "alice", "--cwd", "~/dev/app")
+        self.herdr("tab", "close", far["tab_id"], machine=BOX)
+        conf = self.config.read_text()
+        self.config.write_text("\n".join(l for l in conf.splitlines() if not l.startswith("identity_command")) + "\n")
+        out = self.ok("orphans")
+        self.assertIn("who2: agent gone; resume would refuse it", out)
+        self.assertNotIn("who2: dispatch record with nothing left", out)
 
     def test_a_failing_find_on_the_box_is_not_no_worktrees(self):
         self.dispatch("far", "--machine", BOX, "--as", "alice", "--cwd", "~/dev/app")

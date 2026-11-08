@@ -77,7 +77,8 @@ drops claude's arguments, say) is refused before anything is recorded. The
 line is typed into a shell, so it must be one plain line: not empty, no
 control or format characters, and not an option taken by mistake
 (`--launcher=VALUE` for a command that really starts with `-`). For a launcher start,
-`--timeout` is the whole start's total. A resume keeps the record's session
+`--timeout` is the whole start's total (whole milliseconds, at most a day:
+past that a deadline wraps into the past). A resume keeps the record's session
 unless herdr confirms the same one, and says so when it can't. The launcher is recorded,
 so `resume` starts the agent through it again; `resume --launcher CMD` sets
 one and `--no-launcher` drops it.
@@ -254,7 +255,8 @@ fresh one. It counts as a resume, so `--not-within` still guards it.
 
 `--json` makes `resume` print exactly one JSON line on stdout, whatever
 happens (a usage error and a crash included), with an `outcome`: `resumed` or `started_fresh` (with the pane, tab
-and session, as before), `alive`, `busy` (another resume, dispatch, adopt or
+and session, as before, and `gated`: how this start ran, which after
+`--ungated` on a gated record differs from what the record keeps), `alive`, `busy` (another resume, dispatch, adopt or
 done holds the name), `too_soon`, `dry_run`, `refused` or `failed` (with `why`). Under
 `--if-dead` the first five exit 0 and the last two don't, so a caller can
 tell "it's up" from "too soon" without reading prose. The record is written

@@ -639,8 +639,22 @@ func launchAgent(name, pane, launcher string, agentArgs []string, timeoutMS int,
 		return err
 	}
 	screen, err := herdrText("agent", "read", name)
-	if err != nil || !strings.Contains(screen, trustText) {
+	if err != nil {
 		return err
+	}
+	if !strings.Contains(screen, trustText) {
+		// Idle is up. Blocked on anything but the trust dialog is a screen
+		// bowery can't answer: a notice typed into it would be lost.
+		ags, err := agents()
+		if err != nil {
+			return err
+		}
+		for _, a := range ags {
+			if a.PaneID == pane && a.AgentStatus == "blocked" {
+				return fail("the launched agent in %s is blocked on a screen bowery doesn't answer:\n%s", pane, lastLines(screen, 8))
+			}
+		}
+		return nil
 	}
 	ok, _, err := acceptTrustDialog(name, pane, left())
 	if err != nil {

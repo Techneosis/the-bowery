@@ -377,6 +377,8 @@ func resumeOne(name string, o resumeOpts) error {
 		perm := "permission prompts off"
 		if gated {
 			perm = "permission prompts on"
+		} else if rec.Gated && rec.Cwd != "" {
+			perm += " for this start only (its record stays --gated)"
 		}
 		via := ""
 		if launcher != "" {
@@ -562,7 +564,7 @@ func resumeOne(name string, o resumeOpts) error {
 		started = "started_fresh"
 	}
 	out := []kv{{"name", name}, {"outcome", started}, {"pane_id", p.PaneID}, {"workspace_id", p.WorkspaceID}, {"tab_id", p.TabID},
-		{"sound", sound}, {"session", rec.Session}, {"resumes", fmt.Sprint(rec.Resumes)}}
+		{"sound", sound}, {"session", rec.Session}, {"resumes", fmt.Sprint(rec.Resumes)}, {"gated", fmt.Sprint(gated)}}
 	if machine != "" {
 		out = append(out, kv{"machine", machine})
 	}
@@ -804,8 +806,6 @@ func planLanding(rec *Record, o resumeOpts, ags []Agent, ps []Pane, all []Worksp
 	return landing{placement: "swarm", why: fmt.Sprintf("a new tab %s in %s", rec.Name, cfg.Swarm)}, nil
 }
 
-// resumable says whether resume could bring a dead record's agent back:
-// it has a session, and its directory and worktrees are still there.
 // resumeCmd is the command that would bring a dead record's agent back:
 // --fresh when there's no session to resume, and --gated|--ungated when the
 // record is too old to say how it was started.
@@ -903,7 +903,8 @@ func procEnv(pid int) (string, error) {
 		// only that suffix is searched: a marker in the arguments is not one.
 		`elif c=$(ps -ww -o command= -p %[1]d 2>/dev/null) && e=$(ps -wwE -o command= -p %[1]d 2>/dev/null) `+
 		`&& [ "${#e}" -gt "${#c}" ] && [ "${e#"$c"}" != "$e" ]; then printf '%%s\n' "${e#"$c"}"; `+
-		`else echo "can't read the environment of pid %[1]d" >&2; exit 3; fi`, pid)
+		`elif ps -p %[1]d >/dev/null 2>&1; then echo "it is there, but neither /proc nor ps -E gives its environment to this user" >&2; exit 3; `+
+		`else echo "no such process" >&2; exit 3; fi`, pid)
 	if machine != "" {
 		// As the identity: after `become` the pane's processes are theirs,
 		// and only they (or root) can read their environment.

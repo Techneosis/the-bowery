@@ -698,8 +698,8 @@ func doneNames(target string) ([]string, error) {
 }
 
 // doneLocks takes the name lock of every agent done's target reaches, so a
-// resume, dispatch or adopt of one of them, or a list refreshing its
-// record, can't run under it. A name with a record has its lock made if
+// resume, dispatch, adopt or another done of one of them, or a list
+// refreshing its record, can't run under it. A name with a record has its lock made if
 // need be; one without only has its lock taken if the file is there (a
 // dispatch of it may be mid-way), so a typo leaves nothing behind. Each is
 // waited for briefly, since a list's refresh holds one for an instant. The

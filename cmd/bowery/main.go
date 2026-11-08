@@ -70,7 +70,8 @@ options
                            with claude's arguments; it must exec claude),
                            for a wrapper that sets up its environment.
                            Recorded: resume reuses it
-  --timeout <MS>           readiness timeout for agent start (default 60000)
+  --timeout <MS>           readiness timeout for agent start (default 60000,
+                           at most 86400000: a day)
   --wait                   after the prompt, block until the agent settles
 
 Claude's folder-trust dialog is answered Yes under the trust roots (config;
@@ -106,9 +107,10 @@ other commands
                            record without --gated or --ungated. --dry-run
                            says where.
                            For a hook or a job: --if-dead does nothing (exit
-                           0) when the agent is alive or another resume of it
-                           is running; --not-within DUR refuses one resumed
-                           that recently. One resume of a name runs at a time.
+                           0) when the agent is alive or another resume,
+                           dispatch, adopt or done of it is running;
+                           --not-within DUR refuses one resumed that
+                           recently. One of those runs on a name at a time.
                            --fresh starts it in a new conversation instead,
                            in the same place and the same way (no session
                            needed; the record takes the new one). --json

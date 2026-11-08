@@ -452,6 +452,8 @@ def pane_run(s, p, cmd):
              "session": opt(m["args"], "--resume") or str(uuid.uuid4())}
         if os.environ.get("FAKE_TRUST_DIALOG", "1") != "0" and not any(under(p["cwd"], t) for t in s["trusted"]):
             a["agent_status"], a["screen"] = "blocked", TRUST
+        elif os.environ.get("FAKE_OTHER_DIALOG") == "1":  # a screen bowery has no answer for
+            a["agent_status"], a["screen"] = "blocked", "Allow this tool to run?\n> 1. Yes\n  2. No"
         s["agents"]["~" + p["pane_id"]] = a
 
 

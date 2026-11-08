@@ -182,7 +182,9 @@ class Resume(Bed):
     def test_ungated_on_a_gated_record_is_for_that_start_only(self):
         self.dispatch("gate", "--cwd", self.repo, "--gated")
         self.kill("gate")
-        self.resume("gate", "--ungated")
+        self.assertIn("for this start only (its record stays --gated)", self.ok("resume", "gate", "--ungated", "--dry-run"))
+        rc, got = self.json_of("gate", "--ungated", "--json")
+        self.assertEqual((got["outcome"], got["gated"]), ("resumed", "false"), "this start's mode is said")
         self.assertIn("--dangerously-skip-permissions", self.agent("gate")["args"])
         self.assertTrue(self.record("gate").get("gated"), "the record stays gated")
         self.kill("gate")
@@ -566,6 +568,18 @@ class Resume(Bed):
         self.assertIn("must exec claude", out)
         self.assertIsNotNone(self.pane(a["pane_id"]), "a bare shell is left as it was")
         self.assertNotIn("launcher", self.record("own2"), "nothing recorded")
+
+    def test_a_launched_agent_stuck_on_another_screen_is_taken_back(self):
+        seat = self.launcher()
+        self.dispatch("stuck2", "--cwd", self.repo, "--launcher", f"{seat} stuck2")
+        self.kill("stuck2")
+        before = self.records("stuck2")[0].read_text()
+        rc, got = self.json_of("stuck2", "--json", env={"FAKE_OTHER_DIALOG": "1"})
+        self.assertNotEqual(rc, 0)
+        self.assertEqual(got["outcome"], "failed")
+        self.assertIn("blocked on a screen bowery doesn't answer", got["why"])
+        self.assertEqual(self.records("stuck2")[0].read_text(), before, "the record as it was")
+        self.assertIsNone(self.agent("stuck2"))
 
     def test_a_stored_launcher_is_checked_again(self):
         self.dispatch("stored", "--cwd", self.repo)
@@ -1192,7 +1206,8 @@ class RemoteResume(Resume.__base__):
         self.exit_to_shell("bz", BOX)
         with self.mutate(BOX) as s:  # a pid that is gone by the time it's read
             next(p for p in s["panes"] if p["pane_id"] == rec["pane_id"])["pid"] = 4194000
-        self.refused("can't read the environment of pid 4194000", "resume", "bz")
+        out = self.refused("can't read the environment of pid 4194000", "resume", "bz")
+        self.assertIn("no such process", out, "why, not the same words twice")
         self.assertIsNone(self.agent("bz", BOX))
 
     exit_to_shell = Resume.exit_to_shell

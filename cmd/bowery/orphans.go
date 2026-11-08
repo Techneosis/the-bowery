@@ -270,6 +270,16 @@ func findOrphans() ([]orphan, error) {
 		if unsure && !left {
 			continue // never "nothing left behind it" on a guess
 		}
+		if !res {
+			if why := identityStill(r); why != nil {
+				// Its session and folder may be fine: only the config has
+				// changed under it. Say that, so done isn't taken for the fix.
+				rec.Note = "agent gone; resume would refuse it: " + why.Error()
+				rec.line = name + ": " + rec.Note
+				out = append(out, rec)
+				continue
+			}
+		}
 		switch {
 		case !left && len(recWorktrees(r)) == 0 && res:
 			// No worktree, and its directory still there: the agent itself is

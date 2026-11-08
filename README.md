@@ -184,7 +184,7 @@ bowery dispatch <name> [placement] [options] [-- <prompt>]
                              unwatched pane would wedge on one)
     --kind <KIND>            agent kind (default claude); --model <MODEL>
     --launcher <CMD>         start claude through a wrapper that execs it (recorded; resume reuses it)
-    --timeout <MS>           readiness timeout (default 60000)
+    --timeout <MS>           readiness timeout (default 60000, at most a day: 86400000)
     --wait                   block until the agent settles after its prompt
 
 bowery done <name|pane|path>...   bring them home  [--force] [--keep-worktree] [--keep-branch] [--dry-run] [--machine L]
