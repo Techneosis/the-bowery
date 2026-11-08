@@ -18,7 +18,7 @@ const trustText = "trust this folder"
 type startOpts struct {
 	placement, dir, pane, from, cwd, sound, kind, model, timeout string
 	launcher                                                     string
-	cdTo                                                         string // a reused pane: where to cd after become
+	reused                                                       bool // resume, in the agent's own terminal
 	launcherSet                                                  bool
 	gated, wait                                                  bool
 	branch, base                                                 string
@@ -458,19 +458,35 @@ func startAgent(name string, o startOpts, from, here string, agentArgs []string,
 		return "", fail("could not obtain a pane")
 	}
 	if as != "" && machineConfig(machine).IdentityCommand != "" {
-		if err := become(pane, as); err != nil {
+		// A reused pane (resume, the agent's own terminal) is the shell
+		// become exec'd at dispatch: exec replaced the person's shell, so the
+		// terminal is the identity's for its whole life, and exec'ing the
+		// identity command again inside it may not be allowed (a sudo -u
+		// wrapper). Its variable is still read back before anything starts.
+		if err := become(pane, as, !o.reused); err != nil {
 			return "", err
 		}
 		// An identity command may start its shell in the identity's home
-		// (sudo -i does): back to the folder the agent is recorded under. A
-		// pane bowery was handed (--pane) keeps wherever its shell is.
-		back := newCwd
-		if o.placement == "pane" {
-			back = o.cdTo
-		}
-		if back != "" {
-			if err := herdr(nil, "pane", "run", pane, "cd "+shq(back)); err != nil {
+		// (sudo -i does): back to the folder the agent is recorded under, and
+		// checked, since claude files the session under where it starts. A
+		// pane bowery was handed (--pane) stays wherever its shell now is.
+		if o.placement != "pane" {
+			if err := herdr(nil, "pane", "run", pane, "cd "+shq(newCwd)); err != nil {
 				return "", err
+			}
+			// pane run returns once the line is typed, not once it has run.
+			for tries := 0; ; tries++ {
+				pp, err := paneGet(pane)
+				if err != nil {
+					return "", err
+				}
+				if pp.Cwd == "" || norm(pp.Cwd) == norm(newCwd) {
+					break
+				}
+				if tries == 10 {
+					return "", fail("pane %s is in %s after becoming %s, and couldn't cd to %s", pane, pp.Cwd, as, newCwd)
+				}
+				time.Sleep(200 * time.Millisecond)
 			}
 		}
 	}
@@ -812,13 +828,10 @@ func swarmTab(label, cwd string) (string, error) {
 // identity command, and proves it by the variable that command sets. herdr
 // starts the agent from the pane's shell, so the agent inherits that
 // environment, and the identity's secrets never leave the box.
-func become(pane, who string) error {
+func become(pane, who string, execIt bool) error {
 	mc := machineConfig(machine)
-	for attempt := 1; ; attempt++ {
-		// A reused pane's shell is already who's: exec'ing the identity
-		// command again from inside it can fail (a sudo -u wrapper the
-		// identity may not run), so it's skipped. The proof below still runs.
-		err := herdr(nil, "pane", "run", pane, fmt.Sprintf(`[ "${%s-}" = %s ] || exec %s %s`, mc.IdentityEnv, shq(who), mc.IdentityCommand, shq(who)))
+	for attempt := 1; execIt; attempt++ {
+		err := herdr(nil, "pane", "run", pane, "exec "+mc.IdentityCommand+" "+shq(who))
 		if err == nil {
 			break
 		}

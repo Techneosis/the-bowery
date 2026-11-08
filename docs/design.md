@@ -387,11 +387,21 @@ can name an `identity_command` in the config: a program on the box such that
 With one, `--as <who>` is required: bowery checks `<cmd> <who> true` works on
 the box before making anything, then runs `exec <cmd> <who>` in the new
 pane, proves the switch by reading `$<identity_env>` back from the pane,
-`cd`s back to the agent's folder (a `sudo -i` style command starts in the
-identity's home), and only then starts the agent, which inherits that
-shell's environment. A resume in the agent's own pane finds its shell
-already `<who>`'s and skips the `exec` (the identity may not be allowed to
-run the command itself), but still proves it. The
+`cd`s back to the agent's folder and checks it got there (a `sudo -i` style
+command starts in the identity's home, and claude files a session under the
+folder it starts in), and only then starts the agent, which inherits that
+shell's environment. A pane bowery was handed (`--pane`) isn't moved: its
+agent starts, and is recorded, wherever the shell is after the switch.
+
+A resume in the agent's own terminal runs no `exec`: that terminal's shell
+is the one `exec` replaced at dispatch, so it is still `<who>`'s, and the
+identity may not be allowed to run the command itself (a `sudo -u`
+wrapper). That rests on the terminal, not on the variable: reading
+`$<identity_env>` back there only refuses a shell that has plainly lost it.
+
+`--split` and `--tab` are opened with `--cwd`, the folder recorded for the
+agent. Without it herdr opens them in the source pane's folder, which isn't
+the recorded one when bowery runs from elsewhere (`--from`). The
 credentials never leave the box; they never pass through this machine's argv
 either. Remote git (fetch, worktree add, done's checks) runs through the same
 command. A machine without an `identity_command` refuses `--as`, and its

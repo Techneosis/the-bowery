@@ -1155,23 +1155,53 @@ class RemoteResume(Resume.__base__):
         self.assertEqual(execs, [], "no second exec of the identity command")
         self.assertEqual(self.agent("again", BOX)["env"].get("BOWERY_AS"), "alice")
 
-    def test_a_reused_pane_is_moved_back_after_its_identity_starts(self):
-        # An identity command that starts its shell in the identity's home
-        # (sudo -i style) mustn't take the agent away from its folder.
+    def home_identity(self):
+        """An identity command that starts its shell elsewhere, as sudo -i does (here ~/dev, inside the trust roots)."""
         wrapper = self.t / "become-home"
-        wrapper.write_text(f'#!/usr/bin/env bash\ncd "$HOME"; exec {FAKES}/as "$@"\n')
+        wrapper.write_text(f'#!/usr/bin/env bash\ncd "$HOME/dev"; exec {FAKES}/as "$@"\n')
         wrapper.chmod(0o755)
         self.config.write_text(self.config.read_text().replace(f'"{FAKES}/as"', f'"{wrapper}"'))
+
+    def test_a_new_pane_is_moved_back_after_its_identity_starts(self):
+        self.home_identity()
         self.dispatch("home", "--machine", BOX, "--as", "alice", "--cwd", "~/dev/app")
         rec = json.loads(self.records("home")[0].read_text())
         self.assertEqual(rec["cwd"], str(self.box / "dev/app"))
-        self.exit_to_shell("home", BOX)
-        with self.mutate(BOX) as s:  # a shell that isn't alice's any more
+        self.assertEqual(self.agent("home", BOX)["cwd"], rec["cwd"], "started in its folder, not where alice's shell began")
+
+    def test_a_cd_back_that_fails_is_a_failure(self):
+        self.home_identity()
+        self.env["FAKE_CD_FAIL"] = "1"
+        self.refused("couldn't cd to", "dispatch", "nocd", "--machine", BOX, "--as", "alice", "--cwd", "~/dev/app")
+        self.assertIsNone(self.agent("nocd", BOX))
+        self.assertEqual(self.records("nocd"), [])
+
+    def test_a_handed_pane_records_where_its_identity_left_it(self):
+        self.home_identity()
+        self.dispatch("keep", "--machine", BOX, "--as", "alice", "--cwd", "~/dev/app")
+        blank = self.split_off(self.agent("keep", BOX)["pane_id"], BOX)
+        self.run_in(blank["pane_id"], f"cd {self.box / 'dev/app'}", BOX)  # where the person left it
+        self.dispatch("handed", "--machine", BOX, "--as", "alice", "--pane", blank["pane_id"])
+        rec = json.loads(self.records("handed")[0].read_text())
+        self.assertEqual(rec["cwd"], str(self.box / "dev"), "read after become: where it now sits")
+        self.assertEqual(self.agent("handed", BOX)["cwd"], rec["cwd"])
+
+    def test_a_new_pane_that_inherits_the_variable_still_becomes_its_identity(self):
+        # The herdr server's environment already says alice: a new pane's
+        # shell is still not hers until the identity command has run.
+        open(self.box / "as.log", "w").close()
+        self.dispatch("inh", "--machine", BOX, "--as", "alice", "--cwd", "~/dev/app", env={"BOWERY_AS": "alice"})
+        execs = [l for l in (self.box / "as.log").read_text().splitlines() if l.endswith("\tenv -0")]
+        self.assertEqual(execs, ["alice\tenv -0"], "the identity command ran in the new pane")
+
+    def test_a_reused_pane_that_is_no_longer_its_identity_is_refused(self):
+        self.dispatch("gone", "--machine", BOX, "--as", "alice", "--cwd", "~/dev/app")
+        rec = json.loads(self.records("gone")[0].read_text())
+        self.exit_to_shell("gone", BOX)
+        with self.mutate(BOX) as s:  # not the shell become proved at dispatch
             next(p for p in s["panes"] if p["pane_id"] == rec["pane_id"])["env"].pop("BOWERY_AS")
-        self.ok("resume", "home")
-        a = self.agent("home", BOX)
-        self.assertEqual((a["pane_id"], a["env"].get("BOWERY_AS")), (rec["pane_id"], "alice"))
-        self.assertEqual(a["cwd"], rec["cwd"], "started in its own folder, not alice's home")
+        self.refused("did not become alice", "resume", "gone")
+        self.assertIsNone(self.agent("gone", BOX))
 
     def test_unreachable_box_is_marked_in_orphans_json(self):
         self.far()

@@ -431,21 +431,14 @@ def pane_run(s, p, cmd):
         path = words[1]
         if path.startswith("~/"):
             path = os.path.join(p["env"].get("HOME", os.environ["HOME"]), path[2:])
-        if os.path.isdir(path):
+        if os.path.isdir(path) and os.environ.get("FAKE_CD_FAIL") != "1":
             p["cwd"] = path
         else:
-            p["output"].append(f"cd: {words[1]}: No such file or directory")
+            p["output"].append(f"cd: {words[1]}: Permission denied")
         return
     if words and words[0] == "clear":
         p["output"] = []
         return
-    if words[:1] == ["["] and words[2:3] == ["="] and words[4:6] == ["]", "||"]:
-        # become's guard: [ "${VAR-}" = who ] || exec <identity command> who
-        var = words[1].strip("${}").rstrip("-")
-        if p["env"].get(var) == words[3]:
-            return
-        cmd = cmd.split("|| ", 1)[1]
-        words = shlex.split(cmd)
     if words and words[0] == "exec":
         r = subprocess.run(["bash", "-c", cmd.split(None, 1)[1] + " env -0"],
                            capture_output=True, text=True, env={**server_env(), **p["env"]}, cwd=p["cwd"])
