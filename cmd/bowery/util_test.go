@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -108,5 +109,14 @@ func TestControlDirIsShortEnoughForASocket(t *testing.T) {
 	t.Setenv("XDG_RUNTIME_DIR", "/private/tmp/claude-502/-Users-someone-dev-a-long-project-path/scratchpad")
 	if got := controlDir(); got != "" && !fits(got) {
 		t.Errorf("with a long XDG_RUNTIME_DIR, controlDir() = %q, too long", got)
+	}
+}
+
+func TestControlDirWithoutXDGIsTmp(t *testing.T) {
+	// The branch a Mac takes (no XDG_RUNTIME_DIR, a long TMPDIR): /tmp may
+	// itself be a root-owned symlink there, and must still be accepted.
+	t.Setenv("XDG_RUNTIME_DIR", "")
+	if got, want := controlDir(), fmt.Sprintf("/tmp/bowery-%d", os.Getuid()); got != want {
+		t.Errorf("controlDir() = %q, want %q", got, want)
 	}
 }

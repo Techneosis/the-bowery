@@ -141,9 +141,7 @@ func controlDir() string {
 }
 
 // privateDir: a real folder (Lstat, so a symlink isn't followed), mode 0700,
-// owned by this user, under ancestors nobody else can swap it out of: each
-// a real folder owned by root or us, and not writable by others unless
-// sticky (as /tmp is).
+// owned by this user, under ancestors nobody else can swap it out of.
 func privateDir(d string) bool {
 	st, err := os.Lstat(d)
 	if err != nil || !st.IsDir() || st.Mode().Perm() != 0o700 {
@@ -152,19 +150,43 @@ func privateDir(d string) bool {
 	if sys, ok := st.Sys().(*syscall.Stat_t); !ok || int(sys.Uid) != os.Getuid() {
 		return false
 	}
-	for p := filepath.Dir(filepath.Clean(d)); ; p = filepath.Dir(p) {
+	return safeAncestors(filepath.Dir(filepath.Clean(d)), 0)
+}
+
+// safeAncestors: every folder from p up to / is owned by root or us, and not
+// writable by others unless sticky (as /tmp is). A symlink on the way is
+// allowed only if root owns it (macOS's /tmp -> private/tmp, /var ->
+// private/var), and then where it points must pass the same test.
+func safeAncestors(p string, depth int) bool {
+	if depth > 8 {
+		return false
+	}
+	for ; ; p = filepath.Dir(p) {
 		ps, err := os.Lstat(p)
-		if err != nil || !ps.IsDir() {
+		if err != nil {
 			return false
 		}
 		sys, ok := ps.Sys().(*syscall.Stat_t)
-		if !ok || (sys.Uid != 0 && int(sys.Uid) != os.Getuid()) {
+		if !ok {
 			return false
 		}
-		if ps.Mode().Perm()&0o002 != 0 && ps.Mode()&os.ModeSticky == 0 {
-			return false
+		if ps.Mode()&os.ModeSymlink != 0 {
+			if sys.Uid != 0 {
+				return false // only root's links: nobody else can repoint them
+			}
+			target, err := filepath.EvalSymlinks(p)
+			if err != nil || !safeAncestors(target, depth+1) {
+				return false
+			}
+		} else {
+			if !ps.IsDir() || (sys.Uid != 0 && int(sys.Uid) != os.Getuid()) {
+				return false
+			}
+			if ps.Mode().Perm()&0o002 != 0 && ps.Mode()&os.ModeSticky == 0 {
+				return false
+			}
 		}
-		if p == "/" {
+		if p == "/" || p == "." {
 			return true
 		}
 	}
