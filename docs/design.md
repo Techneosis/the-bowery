@@ -221,9 +221,16 @@ name (per name and server, taken without waiting), so a hook's resume can't
 race another resume or a dispatch of the same agent: `resume` takes it once
 the record is known; `dispatch` takes it for the new name and lets go once
 the record is written, before its prompt, so `--wait` doesn't hold it.
-`done` doesn't take it yet: it's a person's command, and naming the agent a
-target means (a name, a pane, a worktree path) before acting has edges of
-its own.
+`done` takes it too, for every agent its target reaches: the record a name
+or pane resolves to (a pane by its terminal, as `done` itself finds it), the
+live agent's name, and for a worktree path every record that claims it,
+since `done` rewrites each. It waits up to two seconds for each, then
+refuses, and resolves the target again once they're held: if it reaches a
+different agent by then, it refuses. A name with no record has its lock
+taken only if the lock file is already there (a dispatch of it may be
+mid-way), so `done <typo>` leaves nothing behind. `list` and `watch` take
+it, without waiting, to write a session they've seen change, and skip a
+record someone holds, so a `done` can't drop a record they then put back.
 `dispatch` of a name that already has a record is refused: replacing it
 would lose the agent's session and resume count (`done <worktree path>`
 keeps the record; `done <name>` clears it). Once its record is written, a

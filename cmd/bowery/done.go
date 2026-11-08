@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"time"
 )
@@ -626,10 +627,12 @@ func cmdDone(argv []string) {
 		if err == nil && strings.Contains(t, "/") {
 			t, err = hostPath(t)
 		}
-		// done takes no name lock yet (0.3.4): it's a person's command, and
-		// resolving its target to the agent a lock should name has edges.
 		if err == nil {
-			err = doneOne(t, o)
+			var unlock func()
+			if unlock, err = doneLocks(t); err == nil {
+				err = doneOne(t, o)
+				unlock()
+			}
 		}
 		var rf *Refused
 		switch {
@@ -647,6 +650,94 @@ func cmdDone(argv []string) {
 		}
 	}
 	os.Exit(rc)
+}
+
+// doneNames is every agent name done's target reaches: the record it
+// resolves to as doneOne resolves it (by name, or a pane by its terminal),
+// the live agent's name, and for a path every record claiming it, since
+// done rewrites each of those.
+func doneNames(target string) ([]string, error) {
+	seen := map[string]bool{}
+	var names []string
+	add := func(n string) {
+		if n != "" && nameRE.MatchString(n) && !seen[n] {
+			seen[n] = true
+			names = append(names, n)
+		}
+	}
+	if strings.Contains(target, "/") {
+		for _, r := range allRecords() {
+			for _, w := range recWorktrees(r) {
+				if norm(w.Path) == target {
+					add(r.Name)
+				}
+			}
+		}
+	} else {
+		rec, agent, _, err := findTarget(target)
+		if err != nil {
+			return nil, err
+		}
+		if rec != nil {
+			add(rec.Name)
+		}
+		if agent != nil {
+			add(agent.Name)
+		}
+	}
+	sort.Strings(names)
+	return names, nil
+}
+
+// doneLocks takes the name lock of every agent done's target reaches, so a
+// resume, dispatch or adopt of one of them, or a list refreshing its
+// record, can't run under it. A name with a record has its lock made if
+// need be; one without only has its lock taken if the file is there (a
+// dispatch of it may be mid-way), so a typo leaves nothing behind. Each is
+// waited for briefly, since a list's refresh holds one for an instant. The
+// target is resolved again once they're held: if it now reaches another
+// agent, it's refused.
+func doneLocks(target string) (func(), error) {
+	names, err := doneNames(target)
+	if err != nil {
+		return nil, err
+	}
+	var held []func()
+	release := func() {
+		for _, u := range held {
+			u()
+		}
+	}
+	for _, n := range names {
+		create := loadRecord(n) != nil
+		var unlock func()
+		busy := true
+		for try := 0; try < 10 && busy; try++ {
+			if try > 0 {
+				time.Sleep(200 * time.Millisecond)
+			}
+			if unlock, busy, err = lockName(n, create); err != nil {
+				release()
+				return nil, err
+			}
+		}
+		if busy {
+			release()
+			return nil, refuse("a resume, dispatch or adopt of %s is running; try again when it has finished", n)
+		}
+		held = append(held, unlock)
+	}
+	again, err := doneNames(target)
+	if err != nil {
+		release()
+		return nil, err
+	}
+	if strings.Join(again, " ") != strings.Join(names, " ") {
+		release()
+		return nil, refuse("%s changed while it was being checked (it reached %s, now %s); try again",
+			target, strings.Join(names, ", "), strings.Join(again, ", "))
+	}
+	return release, nil
 }
 
 const adoptUsage = "adopt <name> [--launcher CMD] [--gated|--ungated] [--machine LABEL] [--] [<worktree-path>...]"

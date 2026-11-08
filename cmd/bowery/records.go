@@ -403,13 +403,20 @@ func refreshSessions(ags []Agent) {
 		if s == "" || s == r.Session {
 			continue
 		}
-		cur := readRecord(recordPath(r.Name))
-		if cur == nil || cur.Session != r.Session || cur.TerminalID != r.TerminalID {
+		// Under the name's lock, so a done can't drop the record between
+		// the read and the write (which would put it back). A held lock is
+		// someone at work on it: the next list or watch catches up.
+		unlock, held, err := nameLock(r.Name)
+		if err != nil || held {
 			continue
 		}
-		cur.Session = s
-		if err := writeRecord(cur); err != nil {
-			warn("could not update %s's record: %v", r.Name, err)
+		cur := readRecord(recordPath(r.Name))
+		if cur != nil && cur.Session == r.Session && cur.TerminalID == r.TerminalID {
+			cur.Session = s
+			if err := writeRecord(cur); err != nil {
+				warn("could not update %s's record: %v", r.Name, err)
+			}
 		}
+		unlock()
 	}
 }

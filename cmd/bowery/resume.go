@@ -209,9 +209,9 @@ func resumeOne(name string, o resumeOpts) error {
 	}
 	if held {
 		if o.ifDead {
-			return &skipped{"busy", "another resume or dispatch of it is running"}
+			return &skipped{"busy", "another resume, dispatch or done of it is running"}
 		}
-		return refuse("another resume or dispatch of %s is running", name)
+		return refuse("another resume, dispatch or done of %s is running", name)
 	}
 	defer unlock()
 	if r := loadRecord(name); r != nil {
@@ -668,13 +668,30 @@ func parseStamp(s string) (time.Time, bool) {
 // is true when another of them has it. Lock files live in the state dir's
 // locks/ folder and stay there (removing one would race a waiter).
 func nameLock(name string) (unlock func(), held bool, err error) {
-	dir := filepath.Join(stateDir(), "locks")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return nil, false, fail("lock on %s: making %s: %v", name, dir, err)
+	return lockName(name, true)
+}
+
+func lockPath(name string) string {
+	return filepath.Join(stateDir(), "locks", name+"."+serverTag()+".lock")
+}
+
+// lockName takes name's lock without waiting. With create false it makes
+// nothing: a name whose lock file isn't there is not held, and comes back
+// with a no-op unlock (no one has ever locked it, so no one is mid-way).
+func lockName(name string, create bool) (unlock func(), held bool, err error) {
+	p := lockPath(name)
+	flags := os.O_WRONLY
+	if create {
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			return nil, false, fail("lock on %s: making %s: %v", name, filepath.Dir(p), err)
+		}
+		flags |= os.O_CREATE
 	}
-	p := filepath.Join(dir, name+"."+serverTag()+".lock")
-	f, err := os.OpenFile(p, os.O_CREATE|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(p, flags, 0o644)
 	if err != nil {
+		if !create && errors.Is(err, os.ErrNotExist) {
+			return func() {}, false, nil
+		}
 		return nil, false, fail("lock on %s: %v", name, err)
 	}
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {

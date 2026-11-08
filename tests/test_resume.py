@@ -601,7 +601,7 @@ class Resume(Bed):
         self.kill("racy")
         with self.lock("racy"):
             snap = self.unchanged("racy")
-            self.refused("another resume or dispatch of racy is running", "resume", "racy")
+            self.refused("another resume, dispatch or done of racy is running", "resume", "racy")
             self.assertIn("nothing to do", self.ok("resume", "racy", "--if-dead"))
             self.refused("of racy is running", "dispatch", "racy", "--cwd", self.repo)
             self.assertEqual(self.unchanged("racy"), snap)
@@ -609,6 +609,43 @@ class Resume(Bed):
             self.resume("other")  # another name isn't held up
         self.resume("racy")
         self.assertIsNotNone(self.agent("racy"))
+
+    def test_done_waits_its_turn_on_a_name(self):
+        a = self.dispatch("held", "--worktree", "held", "--cwd", self.repo)
+        with self.lock("held"):
+            snap = self.unchanged("held")
+            for target in ("held", a["pane_id"], a["worktree"]):
+                self.refused("of held is running", "done", target, "--force")
+            self.assertEqual(self.unchanged("held"), snap)
+            self.assertIsNotNone(self.agent("held"))
+        self.ok("done", "held", "--force")
+        self.assertEqual(self.records("held"), [])
+
+    def test_done_of_a_name_mid_dispatch_is_refused(self):
+        # dispatch holds the lock from before the agent starts until its
+        # record is written: a live agent, no record yet.
+        self.dispatch("mid", "--cwd", self.repo)
+        with self.lock("mid"):
+            self.records("mid")[0].unlink()
+            self.refused("of mid is running", "done", "mid", "--force")
+            self.assertIsNotNone(self.agent("mid"))
+
+    def test_done_of_a_typo_leaves_no_lock_behind(self):
+        self.dispatch("real", "--cwd", self.repo)
+        before = sorted(p.name for p in (self.state / "locks").glob("*")) if (self.state / "locks").exists() else []
+        self.ok("done", "nosuch")
+        after = sorted(p.name for p in (self.state / "locks").glob("*")) if (self.state / "locks").exists() else []
+        self.assertEqual(after, before)
+
+    def test_a_list_leaves_a_held_record_alone(self):
+        self.dispatch("busy", "--cwd", self.repo)
+        with self.mutate() as s:
+            s["agents"]["busy"]["session"] = "after-clear"
+        with self.lock("busy"):
+            self.ok("list")
+            self.assertNotEqual(self.record("busy")["session"], "after-clear", "someone is at work on it")
+        self.ok("list")
+        self.assertEqual(self.record("busy")["session"], "after-clear")
 
     def test_a_dispatch_that_fails_after_its_record_says_the_agent_is_up(self):
         rc, out = self.bowery("dispatch", "halfway", "--cwd", self.repo, "--", "hello", env={"FAKE_PROMPT_FAIL": "1"})
