@@ -184,7 +184,8 @@ class Resume(Bed):
         self.kill("gate")
         self.assertIn("for this start only (its record stays --gated)", self.ok("resume", "gate", "--ungated", "--dry-run"))
         rc, got = self.json_of("gate", "--ungated", "--json")
-        self.assertEqual((got["outcome"], got["gated"]), ("resumed", "false"), "this start's mode is said")
+        self.assertEqual((got["outcome"], got["gated"], got.get("ungated_once")), ("resumed", "false", "true"),
+                         "this start's mode is said")
         self.assertIn("--dangerously-skip-permissions", self.agent("gate")["args"])
         self.assertTrue(self.record("gate").get("gated"), "the record stays gated")
         self.kill("gate")
@@ -1194,8 +1195,12 @@ class RemoteResume(Resume.__base__):
         self.addCleanup(proc.kill)
         with self.mutate(BOX) as s:
             next(p for p in s["panes"] if p["pane_id"] == rec["pane_id"])["pid"] = proc.pid
+        (self.box / "as.log").write_text("")
         self.refused("carrying OTHER_TOOL_TAG", "resume", "bx")
         self.assertIn("/proc/", self.ssh_log(), "read over ssh")
+        # ...as the identity: after become, the pane's processes are theirs,
+        # and only they (or root) can read their environment.
+        self.assertIn(f"alice\tsh -c if [ -r /proc/{proc.pid}/environ ]", (self.box / "as.log").read_text())
 
     def test_an_environment_it_cannot_read_on_the_box_is_refused(self):
         self.add_box(extra='')

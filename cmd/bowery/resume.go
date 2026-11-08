@@ -571,6 +571,14 @@ func resumeOne(name string, o resumeOpts) error {
 	if rec.As != "" {
 		out = append(out, kv{"as", rec.As})
 	}
+	if keepGated {
+		// Running without prompts while its record (and list, orphans)
+		// still says gated: said here, since nothing else will.
+		out = append(out, kv{"ungated_once", "true"})
+		if !o.asJSON {
+			say("%s runs with permission prompts off for this start only; its record stays --gated", name)
+		}
+	}
 	if len(warnings) > 0 {
 		out = append(out, kv{"warning", strings.Join(warnings, ",")})
 	}

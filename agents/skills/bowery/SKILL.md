@@ -198,7 +198,8 @@ the pane it would use holds someone else's agent, a running process or another
 tool's marker (`hands_off_env`); when its `--as` no longer matches the config;
 and with `--swarm`/`--workspace` while its old tab is still open. A record
 from before 0.3.0 doesn't say whether the agent was gated: pass `--gated` or
-`--ungated`. `--ungated` on a gated record is for that start only.
+`--ungated`. `--ungated` on a gated record is for that start only (the JSON
+line says `"ungated_once": true`). `--timeout MS` is at most a day (86400000).
 `bowery orphans` marks dead agents that can be resumed with
 `(bowery resume <name>; done ends that)`, and `bowery list` shows them as
 `gone ... bowery resume <name>`.

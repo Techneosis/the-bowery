@@ -256,7 +256,8 @@ fresh one. It counts as a resume, so `--not-within` still guards it.
 `--json` makes `resume` print exactly one JSON line on stdout, whatever
 happens (a usage error and a crash included), with an `outcome`: `resumed` or `started_fresh` (with the pane, tab
 and session, as before, and `gated`: how this start ran, which after
-`--ungated` on a gated record differs from what the record keeps), `alive`, `busy` (another resume, dispatch, adopt or
+`--ungated` on a gated record differs from what the record keeps, and then
+`"ungated_once": true` too), `alive`, `busy` (another resume, dispatch, adopt or
 done holds the name), `too_soon`, `dry_run`, `refused` or `failed` (with `why`). Under
 `--if-dead` the first five exit 0 and the last two don't, so a caller can
 tell "it's up" from "too soon" without reading prose. The record is written
