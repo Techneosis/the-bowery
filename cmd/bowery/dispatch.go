@@ -480,6 +480,7 @@ func startAgent(name string, o startOpts, from, here string, agentArgs []string,
 				if err != nil {
 					return "", err
 				}
+				// A herdr that reports no folder can't be checked; it passes.
 				if pp.Cwd == "" || norm(pp.Cwd) == norm(newCwd) {
 					break
 				}
