@@ -401,7 +401,7 @@ func resumeOne(name string, o resumeOpts) error {
 	from := ""
 	switch l.placement {
 	case "pane":
-		so.pane = l.pane
+		so.pane, so.cdTo = l.pane, cwd
 		// claude files a session under the directory it starts in.
 		if cd {
 			if err := herdr(nil, "pane", "run", l.pane, "cd "+shq(cwd)); err != nil {

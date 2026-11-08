@@ -10,7 +10,7 @@ import os
 import shutil
 import subprocess
 
-from _fake import BOX, Bed, sh
+from _fake import BOX, FAKES, Bed, sh
 
 NOTICE = "You were resumed: check what you already did before redoing anything."
 
@@ -1140,6 +1140,38 @@ class RemoteResume(Resume.__base__):
         self.assertEqual(json.loads(self.records("far")[0].read_text())["resumes"], 1)
         self.ok("done", "far", "--force")
         self.assertIsNone(self.agent("far", BOX))
+
+    def test_a_reused_pane_is_not_made_its_identity_twice(self):
+        # Its shell is still alice's: the identity command isn't run in it
+        # again (a sudo -u wrapper may not let alice run it), only proved.
+        self.dispatch("again", "--machine", BOX, "--as", "alice", "--cwd", "~/dev/app")
+        rec = json.loads(self.records("again")[0].read_text())
+        self.exit_to_shell("again", BOX)
+        (self.box / "as.log").write_text("")
+        out = self.ok("resume", "again")
+        self.assertEqual(json.loads(out.strip().splitlines()[-1])["pane_id"], rec["pane_id"], "its own pane, reused")
+        # The fake runs a pane's `exec <identity command> who` as `who env -0`.
+        execs = [l for l in (self.box / "as.log").read_text().splitlines() if l.endswith("\tenv -0")]
+        self.assertEqual(execs, [], "no second exec of the identity command")
+        self.assertEqual(self.agent("again", BOX)["env"].get("BOWERY_AS"), "alice")
+
+    def test_a_reused_pane_is_moved_back_after_its_identity_starts(self):
+        # An identity command that starts its shell in the identity's home
+        # (sudo -i style) mustn't take the agent away from its folder.
+        wrapper = self.t / "become-home"
+        wrapper.write_text(f'#!/usr/bin/env bash\ncd "$HOME"; exec {FAKES}/as "$@"\n')
+        wrapper.chmod(0o755)
+        self.config.write_text(self.config.read_text().replace(f'"{FAKES}/as"', f'"{wrapper}"'))
+        self.dispatch("home", "--machine", BOX, "--as", "alice", "--cwd", "~/dev/app")
+        rec = json.loads(self.records("home")[0].read_text())
+        self.assertEqual(rec["cwd"], str(self.box / "dev/app"))
+        self.exit_to_shell("home", BOX)
+        with self.mutate(BOX) as s:  # a shell that isn't alice's any more
+            next(p for p in s["panes"] if p["pane_id"] == rec["pane_id"])["env"].pop("BOWERY_AS")
+        self.ok("resume", "home")
+        a = self.agent("home", BOX)
+        self.assertEqual((a["pane_id"], a["env"].get("BOWERY_AS")), (rec["pane_id"], "alice"))
+        self.assertEqual(a["cwd"], rec["cwd"], "started in its own folder, not alice's home")
 
     def test_unreachable_box_is_marked_in_orphans_json(self):
         self.far()

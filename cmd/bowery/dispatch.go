@@ -18,6 +18,7 @@ const trustText = "trust this folder"
 type startOpts struct {
 	placement, dir, pane, from, cwd, sound, kind, model, timeout string
 	launcher                                                     string
+	cdTo                                                         string // a reused pane: where to cd after become
 	launcherSet                                                  bool
 	gated, wait                                                  bool
 	branch, base                                                 string
@@ -406,24 +407,20 @@ func startAgent(name string, o startOpts, from, here string, agentArgs []string,
 		*also = append([]RecWorktree{{Path: path, Repo: repo, Branch: branch}}, *also...)
 		cwd = path
 	}
-	var cwdArgs []string
-	if cwd != "" {
-		cwdArgs = []string{"--cwd", cwd}
-	}
 	newCwd := cwd
 	if newCwd == "" {
 		newCwd = here
 	}
+	// Always said: without --cwd, herdr opens a split or tab in the source
+	// pane's directory, which isn't the one recorded when bowery is run
+	// from elsewhere (--from), and resume would look for the session there.
+	cwdArgs := []string{"--cwd", newCwd}
 	rec.Cwd = newCwd
 
 	var pane string
 	switch o.placement {
 	case "pane":
 		pane = o.pane
-		// An existing pane's agent starts wherever its shell is.
-		if pp, err := paneGet(pane); err == nil && pp.Cwd != "" {
-			rec.Cwd = pp.Cwd
-		}
 	case "swarm":
 		p, err := swarmTab(name, newCwd)
 		if err != nil {
@@ -463,6 +460,25 @@ func startAgent(name string, o startOpts, from, here string, agentArgs []string,
 	if as != "" && machineConfig(machine).IdentityCommand != "" {
 		if err := become(pane, as); err != nil {
 			return "", err
+		}
+		// An identity command may start its shell in the identity's home
+		// (sudo -i does): back to the folder the agent is recorded under. A
+		// pane bowery was handed (--pane) keeps wherever its shell is.
+		back := newCwd
+		if o.placement == "pane" {
+			back = o.cdTo
+		}
+		if back != "" {
+			if err := herdr(nil, "pane", "run", pane, "cd "+shq(back)); err != nil {
+				return "", err
+			}
+		}
+	}
+	if o.placement == "pane" {
+		// An existing pane's agent starts wherever its shell is, once it
+		// has become the identity.
+		if pp, err := paneGet(pane); err == nil && pp.Cwd != "" {
+			rec.Cwd = pp.Cwd
 		}
 	}
 
@@ -799,7 +815,10 @@ func swarmTab(label, cwd string) (string, error) {
 func become(pane, who string) error {
 	mc := machineConfig(machine)
 	for attempt := 1; ; attempt++ {
-		err := herdr(nil, "pane", "run", pane, "exec "+mc.IdentityCommand+" "+shq(who))
+		// A reused pane's shell is already who's: exec'ing the identity
+		// command again from inside it can fail (a sudo -u wrapper the
+		// identity may not run), so it's skipped. The proof below still runs.
+		err := herdr(nil, "pane", "run", pane, fmt.Sprintf(`[ "${%s-}" = %s ] || exec %s %s`, mc.IdentityEnv, shq(who), mc.IdentityCommand, shq(who)))
 		if err == nil {
 			break
 		}

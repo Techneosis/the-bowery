@@ -101,6 +101,15 @@ class Start(Bed):
         self.assertEqual(pn["pane_id"], blank["pane_id"])
         self.assertFalse(self.record("pn")["created_pane"])
 
+    def test_a_split_or_tab_opens_in_the_folder_it_records(self):
+        # Run from elsewhere than the pane it starts from: herdr alone would
+        # open the new pane in the source pane's directory.
+        host = self.new_workspace("host", self.repo)
+        for name, how in (("sp", ["--split", "down"]), ("tb", ["--tab"])):
+            a = self.dispatch(name, *how, "--from", host["pane_id"])
+            self.assertEqual(self.record(name)["cwd"], str(self.t))
+            self.assertEqual(self.pane(a["pane_id"])["cwd"], str(self.t), f"{name} starts where its record says")
+
     def test_tab_and_split_need_a_pane_to_start_from(self):
         # Outside any pane, `herdr pane current` names the focused one, as
         # the real server does; with no panes at all there is none.

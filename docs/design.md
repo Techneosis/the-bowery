@@ -386,8 +386,12 @@ can name an `identity_command` in the config: a program on the box such that
 
 With one, `--as <who>` is required: bowery checks `<cmd> <who> true` works on
 the box before making anything, then runs `exec <cmd> <who>` in the new
-pane, proves the switch by reading `$<identity_env>` back from the pane, and
-only then starts the agent, which inherits that shell's environment. The
+pane, proves the switch by reading `$<identity_env>` back from the pane,
+`cd`s back to the agent's folder (a `sudo -i` style command starts in the
+identity's home), and only then starts the agent, which inherits that
+shell's environment. A resume in the agent's own pane finds its shell
+already `<who>`'s and skips the `exec` (the identity may not be allowed to
+run the command itself), but still proves it. The
 credentials never leave the box; they never pass through this machine's argv
 either. Remote git (fetch, worktree add, done's checks) runs through the same
 command. A machine without an `identity_command` refuses `--as`, and its
