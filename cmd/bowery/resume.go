@@ -317,8 +317,21 @@ func resumeOne(name string, o resumeOpts) error {
 	if err != nil {
 		return err
 	}
-	// Last of the checks, so that under --if-dead a "too soon" never hides
-	// a refusal that needs a person.
+	launcher := rec.Launcher
+	switch {
+	case o.noLauncher:
+		launcher = ""
+	case o.launcher != "":
+		launcher = o.launcher
+	case launcher != "":
+		// A stored line is typed into a shell too: it gets the same check.
+		if why := launcherProblem(launcher); why != "" {
+			return refuse("%s's recorded launcher %s; resume with --launcher CMD or --no-launcher", name, why)
+		}
+	}
+
+	// Last of the checks (everything after it is the start, not a refusal),
+	// so that under --if-dead a "too soon" never hides one that needs a person.
 	if o.notWithin > 0 && rec.Resumed != "" {
 		t, ok := parseStamp(rec.Resumed)
 		if !ok {
@@ -349,18 +362,6 @@ func resumeOne(name string, o resumeOpts) error {
 		agentArgs = append(agentArgs, "--resume", rec.Session)
 	}
 
-	launcher := rec.Launcher
-	switch {
-	case o.noLauncher:
-		launcher = ""
-	case o.launcher != "":
-		launcher = o.launcher
-	case launcher != "":
-		// A stored line is typed into a shell too: it gets the same check.
-		if why := launcherProblem(launcher); why != "" {
-			return refuse("%s's recorded launcher %s; resume with --launcher CMD or --no-launcher", name, why)
-		}
-	}
 	where := l.why
 	cd := l.placement == "pane" && norm(cur.Cwd) != norm(cwd)
 	if cd {

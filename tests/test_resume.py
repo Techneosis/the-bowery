@@ -3,6 +3,7 @@
     python3 -m unittest discover tests
 """
 
+import datetime
 import json
 import os
 import shutil
@@ -543,6 +544,13 @@ class Resume(Bed):
         rec["launcher"] = "seat\x1b[2J stored"  # written by hand, or by an older bowery
         f.write_text(json.dumps(rec))
         self.refused("recorded launcher takes one plain command line", "resume", "stored")
+        # A recent resume must not turn that into a quiet "too soon": a job
+        # running --if-dead would never show anyone the bad line.
+        rec["resumed"] = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        f.write_text(json.dumps(rec))
+        rc, got = self.json_of("stored", "--if-dead", "--not-within", "10m", "--json")
+        self.assertEqual(got["outcome"], "refused", got)
+        self.assertIn("recorded launcher", got["why"])
         self.ok("resume", "stored", "--no-launcher")
 
     def test_a_launcher_needs_claude(self):
