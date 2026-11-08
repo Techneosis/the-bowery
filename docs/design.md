@@ -232,8 +232,10 @@ mid-way), so `done <typo>` leaves nothing behind. `list` and `watch` take
 it, without waiting, to write a session they've seen change, and skip a
 record someone holds, so a `done` can't drop a record they then put back.
 `dispatch` of a name that already has a record is refused: replacing it
-would lose the agent's session and resume count (`done <worktree path>`
-keeps the record; `done <name>` clears it). Once its record is written, a
+would lose the agent's session and resume count (`done <name>` clears it).
+`done <worktree path>` strikes the worktree from every record that claims
+it, and drops a record whose own directory was in it (there is nothing left
+to resume), unless its agent is alive. Once its record is written, a
 failed sound tag or prompt says the agent is up and recorded, and prints
 its JSON line. The lock files live in the state dir's `locks/`
 folder and stay there: removing one would race the next taker.

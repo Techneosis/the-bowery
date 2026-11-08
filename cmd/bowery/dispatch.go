@@ -190,7 +190,7 @@ func cmdDispatch(argv []string) {
 	if loadRecord(name) != nil {
 		// Replacing it would forget the agent's session and its resumes
 		// (and with them --not-within's guard).
-		die("dispatch %s: refused, nothing changed: %s already has a dispatch record (a done of its worktree path keeps it); "+
+		die("dispatch %s: refused, nothing changed: %s already has a dispatch record; "+
 			"bowery resume %s, or bowery done %s first", name, name, name, name)
 	}
 	defer unlockName() // and keeps the lock's file referenced until dispatch ends

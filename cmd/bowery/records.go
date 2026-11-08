@@ -256,8 +256,15 @@ func worktreeClaims(ags []Agent, ps []Pane) map[string][]claim {
 }
 
 // forgetWorktree strikes a removed worktree from any (dead) record that
-// claimed it.
+// claimed it. A record whose own directory was in that worktree has nothing
+// left to resume there, so it goes, unless its agent is somehow alive: left
+// behind, it would only refuse the next dispatch of the name.
 func forgetWorktree(path string) error {
+	live := map[string]bool{}
+	ags, agErr := agents()
+	for _, a := range ags {
+		live[a.Name] = true
+	}
 	for _, r := range allRecords() {
 		have := recWorktrees(r)
 		var keep []RecWorktree
@@ -267,6 +274,14 @@ func forgetWorktree(path string) error {
 			}
 		}
 		if len(keep) == len(have) {
+			continue
+		}
+		dir := r.Cwd
+		if dir == "" {
+			dir = r.Worktree
+		}
+		if dir != "" && under(norm(dir), path) && agErr == nil && !live[r.Name] {
+			dropRecord(r.Name)
 			continue
 		}
 		r.Worktrees = keep

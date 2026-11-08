@@ -471,7 +471,21 @@ class SecondWorktrees(Bed):
         (self.state / f"gone.{self.records_tag()}.json").write_text(json.dumps(rec))
         self.assertIn("(dispatched to gone, now gone", self.ok("orphans"))
         self.ok("done", self.wt / "repo" / "gone")
-        self.assertNotIn("worktree", self.record("gone"))
+        # It ran in that worktree: nothing is left to resume, and a record
+        # kept would only refuse the next dispatch of the name.
+        self.assertEqual(self.records("gone"), [])
+        self.dispatch("gone", "--cwd", self.repo)
+
+    def test_done_path_of_an_extra_worktree_keeps_the_record_struck(self):
+        self.dispatch("two", "--worktree", "two", "--cwd", self.repo)
+        extra = self.wt / "repo" / "two-extra"
+        sh("git", "-C", self.repo, "worktree", "add", "-q", "-b", "two-extra", str(extra), "main")
+        self.ok("adopt", "two", str(extra))
+        self.herdr("tab", "close", self.record("two")["tab_id"])
+        self.ok("done", extra)
+        rec = self.record("two")
+        self.assertNotIn(str(extra), json.dumps(rec), "struck")
+        self.assertEqual(rec["worktree"], str(self.wt / "repo" / "two"), "its own worktree kept")
 
     def records_tag(self):
         import hashlib
