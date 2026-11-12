@@ -94,7 +94,8 @@ one and `--no-launcher` drops it.
 | `--pane <id>` | an existing pane | its pane only |
 
 `--space <label>` changes one thing for one call: the workspace a swarm tab
-goes in, found by that label (never a worktree group's) or made rooted at
+goes in, found by that label (letters, digits, `.`, `_`, `-`, up to 48: no
+spaces, so it is one argv word everywhere it is passed) (never a worktree group's) or made rooted at
 `$HOME` like swarm. It isn't recorded. The record's `owns` names the tab, and
 that's all `done` needs. Only the configured swarm is moved to the bottom of
 the list. A workspace someone else keeps for its own purpose stays where they

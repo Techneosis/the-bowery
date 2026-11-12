@@ -12,7 +12,7 @@ const usage = `bowery: send agents out into herdr, and bring them home with done
 
   bowery dispatch <name> [placement] [options] [-- <prompt>]
   bowery done <name|pane|worktree-path>... [--force] [--keep-worktree] [--keep-branch] [--dry-run]
-  bowery resume <name> [--swarm|--workspace] [--gated|--ungated] [--launcher CMD|--no-launcher]
+  bowery resume <name> [--swarm|--workspace] [--space LABEL] [--gated|--ungated] [--launcher CMD|--no-launcher]
                 [--fresh] [--if-dead] [--not-within DUR] [--json] [--machine L] [--timeout MS] [--dry-run] [-- <prompt>]
   bowery watch <config> [--poll 30s] [--max 45m]   (bowery watch --help)
 
@@ -25,6 +25,9 @@ placement (default: --swarm)
   --swarm                  a tab labelled <name> in the swarm workspace, made
                            if absent: the home of agents torn down with done.
                            It closes with its last tab.
+  --space <LABEL>          with --swarm: the tab goes in the workspace with
+                           this label instead (made if absent, never moved).
+                           Letters, digits, . _ -, up to 48; no spaces
   --split [right|down]     split the calling pane (or --from <ID>): an agent
                            to watch beside you
   --tab                    a new tab in the calling pane's workspace

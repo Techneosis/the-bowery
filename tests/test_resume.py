@@ -273,6 +273,10 @@ class Resume(Bed):
         self.refused("--space takes a workspace label", "resume", "sr", "--space", "a/b")
         rc, got = self.json_of("sr", "--json", "--space", "bad label")
         self.assertEqual((rc, got["outcome"]), (1, "refused"), "a usage error, as one JSON line")
+        # A valued option missing its value never swallows --json (hbwa): still one refused line.
+        for opt in ("--space", "--timeout", "--not-within", "--machine"):
+            rc, got = self.json_of("sr", opt, "--json")
+            self.assertEqual((rc, got["name"], got["outcome"]), (1, "sr", "refused"), opt)
         self.assertEqual(self.records("sr")[0].read_text(), snap)
         self.assertNotIn("council", self.ws_labels())
 

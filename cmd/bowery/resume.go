@@ -55,7 +55,11 @@ func resumeJSONScan(argv []string) {
 		case a == "--json":
 			jsonOnce.on = true
 		case valued[a]:
-			i++
+			// Its value, unless that word is another option: a missing value
+			// (--space --json) is a usage error, and --json still counts.
+			if i+1 < len(argv) && !strings.HasPrefix(argv[i+1], "--") {
+				i++
+			}
 		case strings.HasPrefix(a, "-"):
 		case !seen:
 			// The word cmdResume takes as the name, valid or not: a refusal
@@ -100,7 +104,7 @@ func cmdResume(argv []string) {
 			}
 			o.gated = a[2:]
 		case "--space":
-			if i+1 >= len(argv) {
+			if i+1 >= len(argv) || strings.HasPrefix(argv[i+1], "-") {
 				die("--space needs a workspace label")
 			}
 			setSpace(argv[i+1])

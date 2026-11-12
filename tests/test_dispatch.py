@@ -109,9 +109,10 @@ class Start(Bed):
                      "--tab", "--from", host["pane_id"], "--cwd", self.repo)
         self.refused("--space names the workspace", "dispatch", "x", "--workspace", "--space", "council", "--cwd", self.repo)
         self.refused("--space takes a workspace label", "dispatch", "x", "--space", "no spaces", "--cwd", self.repo)
-        self.refused("--space takes a workspace label", "dispatch", "x", "--space", "-swarm", "--cwd", self.repo)
+        self.refused("--space needs a workspace label", "dispatch", "x", "--space", "-swarm", "--cwd", self.repo)
         self.refused("--space given twice", "dispatch", "x", "--space", "a", "--space", "b", "--cwd", self.repo)
         self.refused("--space needs", "dispatch", "x", "--cwd", self.repo, "--space")
+        self.refused("--space needs", "dispatch", "x", "--space", "--cwd", self.repo)
         self.assertEqual(self.ws_labels(), before)
         self.assertEqual(self.records("x"), [])
 

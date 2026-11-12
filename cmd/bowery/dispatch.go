@@ -45,7 +45,7 @@ func parseStart(argv []string) startOpts {
 			next = argv[i+1]
 		}
 		if a == "--space" {
-			if !hasNext {
+			if !hasNext || strings.HasPrefix(next, "-") {
 				die("--space needs a workspace label")
 			}
 			setSpace(next)

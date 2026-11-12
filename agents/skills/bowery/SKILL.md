@@ -39,7 +39,9 @@ Placement, default **`--swarm`**:
 
 `--space <label>` puts a swarm tab in that workspace instead, for this call
 (made if absent, closed with its last tab, never moved). It goes only with
-`--swarm`. On `resume` it names where a new tab goes when the agent's own
+`--swarm`. A label is letters, digits, `.`, `_` or `-`, up to 48, so a
+workspace whose label has a space can't be named; a misspelt label makes a
+new workspace. On `resume` it names where a new tab goes when the agent's own
 pane and tab are gone; it doesn't stop a resume from using those first.
 
 Swarm keeps dispatched agents out of the user's own workspaces: one sidebar
@@ -175,13 +177,14 @@ or it was closed by mistake, its work is half done and its conversation is
 the only record of how far it got. Bring it back instead of starting over:
 
 ```bash
-bowery resume <name> [--dry-run] [--gated|--ungated] [--launcher CMD|--no-launcher] [-- <what to do next>]
+bowery resume <name> [--dry-run] [--space LABEL] [--gated|--ungated] [--launcher CMD|--no-launcher] [-- <what to do next>]
 ```
 
 It starts the agent again in the same worktree, machine and `--as` identity,
 resuming its Claude session, in its own pane if that is still at a shell
 prompt, else a new pane in its own tab, else a new swarm tab (`--workspace`
-for a workspace). Its first message tells it it was resumed and to check what
+for a workspace; `--space LABEL` puts that new tab in the workspace with that
+label, and gives a `--workspace` agent a tab there instead). Its first message tells it it was resumed and to check what
 it already did before redoing anything; add your own follow-up after `--`.
 Then wait on it and `done` it as usual.
 
@@ -201,7 +204,9 @@ when its recorded launcher isn't one plain command line (`--launcher CMD` or
 `--no-launcher`); for a non-claude agent; when its directory or a worktree is gone; when
 the pane it would use holds someone else's agent, a running process or another
 tool's marker (`hands_off_env`); when its `--as` no longer matches the config;
-and with `--swarm`/`--workspace` while its old tab is still open. A record
+with `--swarm`/`--workspace` while its old tab is still open; and with
+`--space` given with `--workspace`, twice with different labels, or with a
+label that breaks the rule above. A record
 from before 0.3.0 doesn't say whether the agent was gated: pass `--gated` or
 `--ungated`. `--ungated` on a gated record is for that start only (the JSON
 line says `"ungated_once": true`). `--timeout MS` is at most a day (86400000).

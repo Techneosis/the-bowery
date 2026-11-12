@@ -178,6 +178,7 @@ another dispatcher's".
 bowery dispatch <name> [placement] [options] [-- <prompt>]
     --swarm (default) | --split [right|down] | --tab | --workspace | --pane <ID>
     --space <LABEL>          the swarm tab goes in this workspace instead of swarm
+                             (letters, digits, . _ -, up to 48; no spaces)
     --from <ID>              the pane to split / whose workspace to use
     --cwd <DIR>              the new pane's directory (the repo, for --worktree)
     --worktree <BRANCH>      a new checkout on a new branch; --base <REF> to pick its start
