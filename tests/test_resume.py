@@ -233,6 +233,49 @@ class Resume(Bed):
         self.assertEqual(self.tab_labels(self.swarm()["workspace_id"]), ["own"])
         self.assertEqual(self.record("own")["owns"], {"kind": "tab", "id": out["tab_id"]})
 
+    def test_space_lands_a_new_tab_in_that_workspace(self):
+        self.dispatch("seat", "--cwd", self.repo)
+        self.kill("seat")
+        out = self.ok("resume", "seat", "--dry-run", "--space", "council")
+        self.assertIn("a new tab seat in council", out)
+        self.assertNotIn("council", self.ws_labels(), "a dry run makes nothing")
+        out = self.resume("seat", "--space", "council")
+        council = next(w for w in self.state_of()["workspaces"] if w["label"] == "council")
+        self.assertEqual(out["workspace_id"], council["workspace_id"])
+        self.assertEqual(self.tab_labels(council["workspace_id"]), ["seat"])
+        self.assertEqual(self.record("seat")["owns"], {"kind": "tab", "id": out["tab_id"]})
+        # --space only names where a new tab goes: its own pane, back at a shell, is still used first.
+        self.exit_to_shell("seat")
+        out = self.resume("seat", "--space", "elsewhere")
+        self.assertEqual(out["workspace_id"], council["workspace_id"])
+        self.assertNotIn("elsewhere", self.ws_labels())
+
+    def test_space_with_json_and_the_name_after_it(self):
+        self.dispatch("late", "--cwd", self.repo)
+        self.kill("late")
+        rc, got = self.json_of("--space", "council", "late", "--json")
+        self.assertEqual((rc, got["name"], got["outcome"]), (0, "late", "resumed"))
+        self.assertIn("council", self.ws_labels())
+
+    def test_space_asks_for_a_tab_even_for_a_workspace_agent(self):
+        self.dispatch("ownws", "--workspace", "--cwd", self.repo)
+        self.herdr("workspace", "close", self.record("ownws")["workspace_id"])
+        out = self.resume("ownws", "--space", "council")
+        council = next(w for w in self.state_of()["workspaces"] if w["label"] == "council")
+        self.assertEqual(self.tab_labels(council["workspace_id"]), ["ownws"])
+        self.assertEqual(self.record("ownws")["owns"], {"kind": "tab", "id": out["tab_id"]})
+
+    def test_space_refusals(self):
+        self.dispatch("sr", "--cwd", self.repo)
+        self.kill("sr")
+        snap = self.records("sr")[0].read_text()
+        self.refused("--workspace makes one of its own", "resume", "sr", "--workspace", "--space", "council")
+        self.refused("--space takes a workspace label", "resume", "sr", "--space", "a/b")
+        rc, got = self.json_of("sr", "--json", "--space", "bad label")
+        self.assertEqual((rc, got["outcome"]), (1, "refused"), "a usage error, as one JSON line")
+        self.assertEqual(self.records("sr")[0].read_text(), snap)
+        self.assertNotIn("council", self.ws_labels())
+
     def test_a_split_agent_comes_back_on_the_rooftop_not_beside_its_neighbour(self):
         host = self.new_workspace("host", str(self.repo))
         self.dispatch("beside", "--split", "--from", host["pane_id"], "--cwd", self.repo)

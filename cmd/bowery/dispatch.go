@@ -44,6 +44,14 @@ func parseStart(argv []string) startOpts {
 		if hasNext {
 			next = argv[i+1]
 		}
+		if a == "--space" {
+			if !hasNext {
+				die("--space needs a workspace label")
+			}
+			setSpace(next)
+			i++
+			continue
+		}
 		if dst, ok := valued[a]; ok || a == "--also-worktree" {
 			if !hasNext {
 				die("%s needs a value", a)
@@ -88,6 +96,9 @@ func parseStart(argv []string) startOpts {
 		}
 	}
 	o.timeout = timeoutArg(o.timeout)
+	if spaceFlag != "" && o.placement != "swarm" {
+		die("--space names the workspace a swarm tab goes in; with --%s there's none", o.placement)
+	}
 	if o.base != "" && o.branch == "" {
 		die("--base only goes with --worktree")
 	}
@@ -788,7 +799,7 @@ func swarmTab(label, cwd string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	ws := findSwarm(all)
+	ws := findSpace(all)
 	wsID, fresh := "", ""
 	if ws != nil {
 		wsID = ws.WorkspaceID
@@ -805,7 +816,7 @@ func swarmTab(label, cwd string) (string, error) {
 			Workspace Workspace
 			Tab       Tab
 		}
-		if err := herdr(&r, "workspace", "create", "--label", cfg.Swarm, "--cwd", h, "--no-focus"); err != nil {
+		if err := herdr(&r, "workspace", "create", "--label", space(), "--cwd", h, "--no-focus"); err != nil {
 			return "", err
 		}
 		wsID, fresh = r.Workspace.WorkspaceID, r.Tab.TabID
@@ -819,8 +830,10 @@ func swarmTab(label, cwd string) (string, error) {
 	if fresh != "" {
 		_ = herdr(nil, "tab", "close", fresh) // the blank shell tab a new workspace comes with
 	}
-	if err := swarmLast(); err != nil {
-		warn("could not move %s to the bottom: %v", cfg.Swarm, err)
+	if space() == cfg.Swarm { // only swarm is kept last; --space's workspace stays where it is
+		if err := swarmLast(); err != nil {
+			warn("could not move %s to the bottom: %v", cfg.Swarm, err)
+		}
 	}
 	return r.RootPane.PaneID, nil
 }

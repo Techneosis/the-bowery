@@ -37,6 +37,11 @@ Placement, default **`--swarm`**:
 | `--workspace [--cwd DIR]` | a new workspace labelled `<name>` | a long-lived agent that earns its own sidebar entry |
 | `--pane <id>` | an existing pane sitting at a shell prompt | reusing a pane you already made |
 
+`--space <label>` puts a swarm tab in that workspace instead, for this call
+(made if absent, closed with its last tab, never moved). It goes only with
+`--swarm`. On `resume` it names where a new tab goes when the agent's own
+pane and tab are gone; it doesn't stop a resume from using those first.
+
 Swarm keeps dispatched agents out of the user's own workspaces: one sidebar
 entry, one tab per agent, moved to the bottom of the workspace list when
 bowery makes or finds it. It closes when its last agent is torn down and

@@ -37,14 +37,14 @@ type resumeOpts struct {
 	prompt             []string
 }
 
-const resumeUsage = "bowery resume <name> [--swarm|--workspace] [--gated|--ungated] [--launcher CMD|--no-launcher] " +
+const resumeUsage = "bowery resume <name> [--swarm|--workspace] [--space LABEL] [--gated|--ungated] [--launcher CMD|--no-launcher] " +
 	"[--fresh] [--if-dead] [--not-within DUR] [--json] [--machine LABEL] [--timeout MS] [--dry-run] [-- <prompt>]"
 
 // resumeJSONScan turns on --json's one-line promise for a resume before
 // anything can fail (main calls it before loading the config), and finds
 // the name: the first word that isn't an option or an option's value.
 func resumeJSONScan(argv []string) {
-	valued := map[string]bool{"--launcher": true, "--not-within": true, "--timeout": true, "--machine": true}
+	valued := map[string]bool{"--launcher": true, "--not-within": true, "--timeout": true, "--machine": true, "--space": true}
 	seen := false
 	for i := 0; i < len(argv); i++ {
 		a := argv[i]
@@ -99,6 +99,12 @@ func cmdResume(argv []string) {
 				die("resume: --gated and --ungated contradict each other")
 			}
 			o.gated = a[2:]
+		case "--space":
+			if i+1 >= len(argv) {
+				die("--space needs a workspace label")
+			}
+			setSpace(argv[i+1])
+			i++
 		case "--dry-run":
 			o.dryRun = true
 		case "--launcher":
@@ -148,6 +154,9 @@ func cmdResume(argv []string) {
 	}
 	if o.launcher != "" && o.noLauncher {
 		die("resume: --launcher and --no-launcher contradict each other")
+	}
+	if spaceFlag != "" && o.placement == "workspace" {
+		die("resume: --space names the workspace a new tab goes in; --workspace makes one of its own")
 	}
 	if !nameRE.MatchString(name) {
 		die("agent name must be lowercase/digits/-/_ (got '%s')", name)
@@ -804,14 +813,14 @@ func planLanding(rec *Record, o resumeOpts, ags []Agent, ps []Pane, all []Worksp
 	pl := o.placement
 	if pl == "" {
 		pl = "swarm"
-		if rec.Placement == "workspace" {
+		if rec.Placement == "workspace" && spaceFlag == "" { // --space asks for a tab
 			pl = "workspace"
 		}
 	}
 	if pl == "workspace" {
 		return landing{placement: "workspace", why: "a new workspace " + rec.Name}, nil
 	}
-	return landing{placement: "swarm", why: fmt.Sprintf("a new tab %s in %s", rec.Name, cfg.Swarm)}, nil
+	return landing{placement: "swarm", why: fmt.Sprintf("a new tab %s in %s", rec.Name, space())}, nil
 }
 
 // resumeCmd is the command that would bring a dead record's agent back:

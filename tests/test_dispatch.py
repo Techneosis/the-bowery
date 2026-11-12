@@ -85,6 +85,36 @@ class Start(Bed):
         self.ok("done", "named")
         self.assertEqual(self.ws_labels(), [])
 
+    def test_space_puts_one_dispatch_in_another_workspace(self):
+        self.new_workspace("first", self.repo)
+        out = self.dispatch("in-council", "--space", "council", "--cwd", self.repo)
+        council = next(w for w in self.state_of()["workspaces"] if w["label"] == "council")
+        self.assertEqual(out["workspace_id"], council["workspace_id"])
+        self.assertEqual(self.tab_labels(council["workspace_id"]), ["in-council"])
+        self.assertEqual(self.record("in-council")["owns"], {"kind": "tab", "id": out["tab_id"]})
+        self.new_workspace("after", self.repo)
+        self.dispatch("in-council-2", "--space", "council", "--cwd", self.repo)
+        self.assertEqual(self.tab_labels(council["workspace_id"]), ["in-council", "in-council-2"], "found, not made again")
+        self.assertEqual(self.ws_labels(), ["first", "council", "after"], "never moved: only swarm is kept last")
+        self.dispatch("plain", "--cwd", self.repo)
+        self.assertEqual(self.tab_labels(self.swarm()["workspace_id"]), ["plain"], "swarm is still the default")
+        self.ok("done", "in-council")
+        self.ok("done", "in-council-2")
+        self.assertNotIn("council", self.ws_labels(), "and it goes with its last tab, like swarm")
+
+    def test_space_refusals(self):
+        host = self.new_workspace("host", self.repo)
+        before = self.ws_labels()
+        self.refused("--space names the workspace a swarm tab goes in", "dispatch", "x", "--space", "council",
+                     "--tab", "--from", host["pane_id"], "--cwd", self.repo)
+        self.refused("--space names the workspace", "dispatch", "x", "--workspace", "--space", "council", "--cwd", self.repo)
+        self.refused("--space takes a workspace label", "dispatch", "x", "--space", "no spaces", "--cwd", self.repo)
+        self.refused("--space takes a workspace label", "dispatch", "x", "--space", "-swarm", "--cwd", self.repo)
+        self.refused("--space given twice", "dispatch", "x", "--space", "a", "--space", "b", "--cwd", self.repo)
+        self.refused("--space needs", "dispatch", "x", "--cwd", self.repo, "--space")
+        self.assertEqual(self.ws_labels(), before)
+        self.assertEqual(self.records("x"), [])
+
     def test_placements(self):
         host = self.new_workspace("host", self.repo)
         sp = self.dispatch("sp", "--split", "down", "--from", host["pane_id"], "--cwd", self.repo)

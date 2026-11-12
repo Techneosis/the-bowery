@@ -93,6 +93,14 @@ one and `--no-launcher` drops it.
 | `--split` | split off your pane | its pane only |
 | `--pane <id>` | an existing pane | its pane only |
 
+`--space <label>` changes one thing for one call: the workspace a swarm tab
+goes in, found by that label (never a worktree group's) or made rooted at
+`$HOME` like swarm. It isn't recorded. The record's `owns` names the tab, and
+that's all `done` needs. Only the configured swarm is moved to the bottom of
+the list. A workspace someone else keeps for its own purpose stays where they
+put it. It's refused with any placement but `--swarm`, since only a swarm tab
+has a workspace to choose.
+
 What bowery made for an agent is the agent's: whatever the agent opens there
 later (a shell it split off, a dev server) is closed with it. A split or a
 named pane sits among panes that are not the agent's, so there only its own
@@ -201,7 +209,9 @@ tab or workspace bowery made for it, if that is still open (checked by label,
 as `done` does); else a new place of the kind it had: a swarm tab, or a
 workspace for a `--workspace` agent. A `--split` or `--pane` agent never owned
 the panes around it, so once its own pane is gone it comes back in a swarm
-tab rather than beside a neighbour. `--swarm` and `--workspace` override
+tab rather than beside a neighbour. `--space` names the workspace for that new
+tab, and for a `--workspace` agent asks for a tab there instead of a workspace;
+it never skips the agent's own pane or tab. `--swarm` and `--workspace` override
 (refused while the old place is open, above). The record's pane, terminal,
 tab and workspace ids are rewritten every time, and for a new swarm tab or
 workspace its `placement` and `owns` too, so `done` brings it home as usual;

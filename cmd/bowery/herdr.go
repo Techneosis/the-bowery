@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -230,9 +231,45 @@ func rpc(method string, params any) error {
 	return nil
 }
 
+// spaceFlag is --space: for one call, the workspace a new tab goes in
+// instead of the config's swarm. Empty means swarm.
+var spaceFlag string
+
+var spaceRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,47}$`)
+
+// setSpace takes --space's value: a workspace label, by the same rule
+// everywhere.
+func setSpace(v string) {
+	if !spaceRE.MatchString(v) {
+		die("--space takes a workspace label: letters, digits, '.', '_' or '-', up to 48 (got '%s')", v)
+	}
+	if spaceFlag != "" && spaceFlag != v {
+		die("--space given twice (%s and %s); pick one", spaceFlag, v)
+	}
+	spaceFlag = v
+}
+
+// space is the workspace this call puts a new tab in: --space, else swarm.
+func space() string {
+	if spaceFlag != "" {
+		return spaceFlag
+	}
+	return cfg.Swarm
+}
+
+// findSpace finds the workspace a new tab goes in (space()), never a
+// worktree group's.
+func findSpace(all []Workspace) *Workspace {
+	return findLabelled(all, space())
+}
+
 func findSwarm(all []Workspace) *Workspace {
+	return findLabelled(all, cfg.Swarm)
+}
+
+func findLabelled(all []Workspace, label string) *Workspace {
 	for i := range all {
-		if all[i].Label == cfg.Swarm && all[i].Worktree == nil {
+		if all[i].Label == label && all[i].Worktree == nil {
 			return &all[i]
 		}
 	}

@@ -31,7 +31,7 @@ _bowery() {
     local names
     case $cmd in
         dispatch)
-            [[ $cur == -* ]] && COMPREPLY=($(compgen -W "--swarm --split --tab --workspace --pane --from --cwd --worktree --base --also-worktree --machine --as --quiet --loud --gated --kind --model --launcher --timeout --wait --" -- "$cur")) ;;
+            [[ $cur == -* ]] && COMPREPLY=($(compgen -W "--swarm --space --split --tab --workspace --pane --from --cwd --worktree --base --also-worktree --machine --as --quiet --loud --gated --kind --model --launcher --timeout --wait --" -- "$cur")) ;;
         done)
             if [[ $cur == -* ]]; then
                 COMPREPLY=($(compgen -W "--force --keep-worktree --keep-branch --dry-run --machine" -- "$cur"))
@@ -46,7 +46,7 @@ _bowery() {
                 COMPREPLY=($(compgen -d -- "$cur"))
             fi ;;
         resume)
-            [[ $cur == -* ]] && COMPREPLY=($(compgen -W "--swarm --workspace --gated --ungated --launcher --no-launcher --fresh --if-dead --not-within --json --dry-run --timeout --machine --" -- "$cur")) \
+            [[ $cur == -* ]] && COMPREPLY=($(compgen -W "--swarm --workspace --space --gated --ungated --launcher --no-launcher --fresh --if-dead --not-within --json --dry-run --timeout --machine --" -- "$cur")) \
                 || COMPREPLY=($(compgen -W "$(bowery names 2>/dev/null)" -- "$cur")) ;;
         mute|unmute)
             [[ $cur == -* ]] && COMPREPLY=($(compgen -W "--machine" -- "$cur")) \

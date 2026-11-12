@@ -59,7 +59,10 @@ out for them, so there are no half-dispatched agents loitering in panes.
 everyone's way: one workspace at the bottom of the list, one tab per agent,
 labelled with its name. It is opened by the first dispatch and closed with
 the last tab. Agents you want to watch can go beside you instead (`--split`,
-`--tab`), or get a workspace of their own (`--workspace`).
+`--tab`), or get a workspace of their own (`--workspace`). A courier who
+belongs on another roof waits there for one call (`--space <label>`): a tab in
+that workspace, found by its label or opened for it, and closed with its last
+tab like the Rooftop, but left where it is in the list.
 
 **Their own route** (`--worktree <branch>`). An agent working on code gets a
 fresh checkout on a new branch, cut from the remote's default branch as of a
@@ -174,6 +177,7 @@ another dispatcher's".
 ```
 bowery dispatch <name> [placement] [options] [-- <prompt>]
     --swarm (default) | --split [right|down] | --tab | --workspace | --pane <ID>
+    --space <LABEL>          the swarm tab goes in this workspace instead of swarm
     --from <ID>              the pane to split / whose workspace to use
     --cwd <DIR>              the new pane's directory (the repo, for --worktree)
     --worktree <BRANCH>      a new checkout on a new branch; --base <REF> to pick its start
@@ -188,7 +192,7 @@ bowery dispatch <name> [placement] [options] [-- <prompt>]
     --wait                   block until the agent settles after its prompt
 
 bowery done <name|pane|path>...   bring them home  [--force] [--keep-worktree] [--keep-branch] [--dry-run] [--machine L]
-bowery resume <name> [--swarm|--workspace] [--gated|--ungated] [--launcher CMD|--no-launcher] [--fresh] [--if-dead] [--not-within DUR] [--json] [--machine L] [--timeout MS] [--dry-run] [-- <prompt>]   bring a dead one back
+bowery resume <name> [--swarm|--workspace] [--space LABEL] [--gated|--ungated] [--launcher CMD|--no-launcher] [--fresh] [--if-dead] [--not-within DUR] [--json] [--machine L] [--timeout MS] [--dry-run] [-- <prompt>]   bring a dead one back
 bowery adopt <name> [<path>...] [--launcher CMD] [--gated|--ungated]   more worktrees; a record for an agent started by hand; or an old record filled from its live agent
 bowery orphans [--machine L] [--json]   what done would clean up
 bowery list [--machine L]         agents, quiet or loud, who can be resumed, and how many strays

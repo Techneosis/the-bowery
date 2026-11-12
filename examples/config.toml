@@ -1,7 +1,8 @@
 # ~/.config/bowery/config.toml — every key is optional; `bowery config` shows
 # what is in force. These are the defaults, plus one example machine.
 
-# The workspace dispatched agents get a tab in by default.
+# The workspace dispatched agents get a tab in by default (one call can name
+# another with --space <label>).
 swarm = "swarm"
 
 # The pane-metadata source the sound=off token is reported under. A sound
