@@ -337,7 +337,8 @@ apart from the local ones.
 
 A remote record has `"socket": null` and adds `machine`, `host` and `as`.
 For `resume`: `session`, `cwd`, `gated`, `model`, and after a resume,
-`resumed` and `resumes`. Each is optional, so a record without them still
+`resumed` and `resumes`. `ticket` is `--ticket`'s id; a resume rewrites the
+record it read, so the ticket stays. Each is optional, so a record without them still
 loads (and is not resumable without a session).
 `worktrees` is every checkout the agent works in: its own, `--also-worktree`,
 and `adopt`. Records written before `owns` existed are read by their
@@ -369,6 +370,20 @@ here does, because a shared box runs other people's dispatches too.
 
 It covers the local server and every machine there is a record for; a machine
 that cannot be reached is reported and skipped, never fatal.
+
+## List
+
+`list` prints a line per live agent (pane, sound, status, name, title) and
+one per dead record that `resume` can bring back, then an orphan count on
+stderr. `--json` is the same servers as one array for a program: every live
+agent (dispatched or not: `dispatched` says) and every record whose agent is
+gone, resumable or not, each with the same keys, null where there is no
+value. `state` is herdr's status for a live agent and `gone` for a record.
+`last_seen` is the time of the call for a live agent and null for a gone one:
+bowery keeps no clock on agents, so it doesn't know when one went. A machine
+that can't be read is an entry of its own, `state: "unreachable"`, as in
+`orphans --json`. It skips the orphan scan, the slow part of `list`. Like the
+text, it writes fresh session ids into the records it reads; nothing else.
 
 ## Remote dispatch
 

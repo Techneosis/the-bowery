@@ -164,6 +164,22 @@ Teardown order for a merge-based task: agent pushes → PR merged → `done`. If
 it refuses "not merged", the PR isn't merged yet; don't reach for `--force`
 unless the work is meant to be thrown away.
 
+**Tickets.** When the work has a ticket (a tracker key like `DEV-551`, or a
+work-item id), pass `--ticket <ID>` to `dispatch`: it's recorded, `resume`
+keeps it, and `bowery list --json` reports it, which is how a dashboard ties
+a running agent to its ticket. One per agent; letters, digits, `.`, `_`, `-`,
+up to 80.
+
+**`bowery list --json`** is the program's view: one JSON array on stdout, an
+object per agent on every server `list` covers, with `name`, `machine` (null
+for the local server), `as`, `state` (`working`, `idle`, `done`, `blocked`,
+or `gone` for a record whose agent is dead), `title`, `ticket`, `worktree`,
+`branch`, `dispatched_at`, `last_seen` (now for a live agent, null for a gone
+one), plus `pane`, `sound`, `dispatched`, `resumable`, `resumes` and `note`.
+Absent values are null. A machine that can't be read is one entry with
+`state: "unreachable"`, never an empty list. No orphan count: that's
+`orphans --json`.
+
 `bowery list` prints a one-line orphan count on stderr; `bowery orphans` lists
 them: finished dispatched agents still alive, worktrees with no pane in them
 that no live agent's record claims, blank repo-root workspaces, records whose

@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -14,6 +15,10 @@ import (
 )
 
 const trustText = "trust this folder"
+
+// ticketRE is --ticket's id: a tracker key (DEV-551) or any item id, never
+// a path or anything a shell or a JSON reader could trip on.
+var ticketRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$`)
 
 type startOpts struct {
 	placement, dir, pane, from, cwd, sound, kind, model, timeout string
@@ -24,6 +29,7 @@ type startOpts struct {
 	branch, base                                                 string
 	also, prompt                                                 []string
 	machine, as                                                  string
+	ticket                                                       string
 }
 
 func parseStart(argv []string) startOpts {
@@ -49,6 +55,20 @@ func parseStart(argv []string) startOpts {
 				die("--space needs a workspace label")
 			}
 			setSpace(next)
+			i++
+			continue
+		}
+		if a == "--ticket" {
+			if !hasNext || strings.HasPrefix(next, "-") {
+				die("--ticket needs a ticket id")
+			}
+			if !ticketRE.MatchString(next) {
+				die("--ticket takes a ticket id: a letter or digit, then letters, digits, '.', '_' or '-', up to 80 (got '%s')", next)
+			}
+			if o.ticket != "" && o.ticket != next {
+				die("--ticket given twice (%s and %s); an agent has one ticket", o.ticket, next)
+			}
+			o.ticket = next
 			i++
 			continue
 		}
@@ -253,7 +273,7 @@ func cmdDispatch(argv []string) {
 
 	sock := socketPath()
 	rec := &Record{Name: name, Socket: &sock, Placement: o.placement, Kind: o.kind, Started: nowISO(),
-		Gated: o.gated, Model: o.model, Launcher: o.launcher}
+		Gated: o.gated, Model: o.model, Launcher: o.launcher, Ticket: o.ticket}
 	here, _ := os.Getwd() // default cwd for a new pane
 	if machine != "" {
 		r, _ := remote()
@@ -308,6 +328,9 @@ func cmdDispatch(argv []string) {
 	}
 	if as != "" {
 		out = append(out, kv{"as", as})
+	}
+	if rec.Ticket != "" {
+		out = append(out, kv{"ticket", rec.Ticket})
 	}
 	// From here the agent is up and recorded: a failure says so, so a retry
 	// isn't a puzzle ("already has a record").

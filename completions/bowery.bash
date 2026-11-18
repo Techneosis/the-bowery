@@ -31,7 +31,7 @@ _bowery() {
     local names
     case $cmd in
         dispatch)
-            [[ $cur == -* ]] && COMPREPLY=($(compgen -W "--swarm --space --split --tab --workspace --pane --from --cwd --worktree --base --also-worktree --machine --as --quiet --loud --gated --kind --model --launcher --timeout --wait --" -- "$cur")) ;;
+            [[ $cur == -* ]] && COMPREPLY=($(compgen -W "--swarm --space --split --tab --workspace --pane --from --cwd --worktree --base --also-worktree --machine --as --ticket --quiet --loud --gated --kind --model --launcher --timeout --wait --" -- "$cur")) ;;
         done)
             if [[ $cur == -* ]]; then
                 COMPREPLY=($(compgen -W "--force --keep-worktree --keep-branch --dry-run --machine" -- "$cur"))
@@ -52,7 +52,7 @@ _bowery() {
             [[ $cur == -* ]] && COMPREPLY=($(compgen -W "--machine" -- "$cur")) \
                 || COMPREPLY=($(compgen -W "$(bowery names 2>/dev/null)" -- "$cur")) ;;
         orphans) COMPREPLY=($(compgen -W "--machine --json" -- "$cur")) ;;
-        list) COMPREPLY=($(compgen -W "--machine" -- "$cur")) ;;
+        list) COMPREPLY=($(compgen -W "--machine --json" -- "$cur")) ;;
         swarm-tab) [[ $cur == -* ]] && COMPREPLY=($(compgen -W "--cwd --machine" -- "$cur")) ;;
         upgrade) COMPREPLY=($(compgen -W "--check" -- "$cur")) ;;
     esac

@@ -74,8 +74,12 @@ token) unless sent `--loud`, so a sound plugin of yours can stay silent for
 them and ring only for the agents you talk to yourself.
 
 **The book.** Every dispatch is written down (`~/.local/state/bowery/`): the
-pane, the tab or workspace made for it, every worktree it works in. `done`
-reads the book, which is how it knows what is the agent's and what is not.
+pane, the tab or workspace made for it, every worktree it works in, and the
+job ticket it carries if it was given one (`--ticket DEV-551`), which stays
+with it through every return. `done` reads the book, which is how it knows
+what is the agent's and what is not. `bowery list --json` reads it out for a
+program: every courier on every roof, working, idle, done, blocked or gone,
+with their ticket, route and when they were sent.
 
 **Bringing them home** (`bowery done <name>`). The agent's pane closes, and
 with it the tab or workspace made for it and anything the agent opened there.
@@ -184,6 +188,8 @@ bowery dispatch <name> [placement] [options] [-- <prompt>]
     --worktree <BRANCH>      a new checkout on a new branch; --base <REF> to pick its start
     --also-worktree <PATH>   another existing worktree this agent works in (repeatable)
     --machine <LABEL>        on a saved herdr machine; --as <WHO> for an identity there
+    --ticket <ID>            the work item it's on (DEV-551, an item id): recorded, kept by
+                             resume, reported by list --json
     --loud                   no sound=off tag
     --gated                  keep permission prompts on (default: bypassed, as an
                              unwatched pane would wedge on one)
@@ -196,7 +202,8 @@ bowery done <name|pane|path>...   bring them home  [--force] [--keep-worktree] [
 bowery resume <name> [--swarm|--workspace] [--space LABEL] [--gated|--ungated] [--launcher CMD|--no-launcher] [--fresh] [--if-dead] [--not-within DUR] [--json] [--machine L] [--timeout MS] [--dry-run] [-- <prompt>]   bring a dead one back
 bowery adopt <name> [<path>...] [--launcher CMD] [--gated|--ungated]   more worktrees; a record for an agent started by hand; or an old record filled from its live agent
 bowery orphans [--machine L] [--json]   what done would clean up
-bowery list [--machine L]         agents, quiet or loud, who can be resumed, and how many strays
+bowery list [--machine L] [--json]   agents, quiet or loud, who can be resumed, and how many strays
+                                  (--json: one array, with state, ticket, worktree, branch, times)
 bowery mute|unmute <name|pane>... set or clear the sound=off tag
 bowery swarm-tab <label> [--cwd DIR] [--machine L]   a rooftop tab with no agent; prints its pane
 bowery swarm-last                 move the swarm workspace to the bottom

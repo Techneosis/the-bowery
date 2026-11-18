@@ -76,6 +76,10 @@ options
   --timeout <MS>           readiness timeout for agent start (default 60000,
                            at most 86400000: a day)
   --wait                   after the prompt, block until the agent settles
+  --ticket <ID>            the work item the agent is on (DEV-551, an item
+                           id): a letter or digit, then letters, digits,
+                           . _ -, up to 80. Recorded, kept by resume, shown
+                           by list --json; dispatch's JSON adds "ticket"
 
 Claude's folder-trust dialog is answered Yes under the trust roots (config;
 default ~/dev) and the herdr worktrees dir; anywhere else the start fails and
@@ -132,8 +136,13 @@ other commands
                            resume can bring back), on every server with a
                            record here. Read-only. An unreachable machine is
                            a warning, and an "unreachable" entry in --json.
-  list [--machine L]       agents, who is muted, dead agents that can be
-                           resumed, and an orphan count
+  list [--machine L] [--json]
+                           agents, who is muted, dead agents that can be
+                           resumed, and an orphan count. --json: one array,
+                           an object per agent (name, machine, as, state,
+                           title, ticket, worktree, branch, dispatched_at,
+                           last_seen, ...), every dead record included, and
+                           an "unreachable" entry for a box that can't be read
   mute|unmute <target>...  set or clear an agent's sound=off tag
   swarm-tab <label> [--cwd DIR] [--machine L]
                            a new tab in swarm with no agent; prints its pane

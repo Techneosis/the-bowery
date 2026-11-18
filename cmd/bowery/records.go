@@ -61,6 +61,9 @@ type Record struct {
 	Launcher string `json:"launcher,omitempty"`
 	Resumed  string `json:"resumed,omitempty"` // the last resume
 	Resumes  int    `json:"resumes,omitempty"` // how many times
+	// Ticket is --ticket: the work item this agent is on (DEV-551, a City
+	// Hall item id...). Resume keeps it; list --json reports it.
+	Ticket string `json:"ticket,omitempty"`
 }
 
 func stateDir() string {

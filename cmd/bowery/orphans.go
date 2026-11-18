@@ -402,8 +402,91 @@ func printOrphans(found []orphan, ind string) {
 	}
 }
 
+// listed is one agent in list --json: a live herdr agent, or a record whose
+// agent is gone. Absent values are null, never "", so a reader can tell
+// "none" from "empty". The shape is a contract: add keys, never rename them.
+type listed struct {
+	Name         *string `json:"name"`
+	Machine      *string `json:"machine"` // null: this machine's own server
+	As           *string `json:"as"`
+	State        string  `json:"state"` // working, idle, done, blocked, gone (or herdr's word), unreachable
+	Title        *string `json:"title"`
+	Ticket       *string `json:"ticket"`
+	Worktree     *string `json:"worktree"`
+	Branch       *string `json:"branch"`
+	DispatchedAt *string `json:"dispatched_at"`
+	LastSeen     *string `json:"last_seen"` // now for a live agent; null when bowery never saw it go
+	Pane         *string `json:"pane"`
+	Sound        *string `json:"sound"`
+	Dispatched   bool    `json:"dispatched"` // it has a dispatch record here
+	Resumable    bool    `json:"resumable"`
+	Resumes      int     `json:"resumes"`
+	Note         *string `json:"note"`
+}
+
+func strp(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
+}
+
+// listMachine is list --json's entries for the current server.
+func listMachine() ([]listed, error) {
+	recs := map[string]*Record{}
+	for _, r := range allRecords() {
+		recs[r.Name] = r
+	}
+	ags, err := agents()
+	if err != nil {
+		return nil, err
+	}
+	now := nowISO()
+	out := []listed{}
+	for _, a := range ags {
+		snd := a.Tokens["sound"]
+		if snd == "" {
+			snd = "on"
+		}
+		e := listed{Name: strp(a.Name), State: a.AgentStatus, Title: strp(a.Title), LastSeen: &now,
+			Pane: strp(a.PaneID), Sound: &snd}
+		if r := recs[a.Name]; r != nil {
+			e.Dispatched, e.As, e.Ticket = true, strp(r.As), strp(r.Ticket)
+			e.Worktree, e.Branch, e.DispatchedAt, e.Resumes = strp(r.Worktree), strp(r.Branch), strp(r.Started), r.Resumes
+		}
+		out = append(out, e)
+	}
+	refreshSessions(ags)
+	alive := map[string]bool{}
+	for _, a := range ags {
+		alive[a.Name] = true
+	}
+	for _, r := range allRecords() {
+		if alive[r.Name] {
+			continue
+		}
+		ok, err := resumable(r)
+		var note *string
+		if err != nil {
+			warn("%s: can't tell whether it can be resumed: %v", r.Name, herdrMsg(err))
+			note = strp("can't tell whether it can be resumed: " + herdrMsg(err))
+		} else if ok {
+			note = strp(resumeCmd(r))
+		}
+		name := r.Name
+		out = append(out, listed{Name: &name, As: strp(r.As), State: "gone", Ticket: strp(r.Ticket),
+			Worktree: strp(r.Worktree), Branch: strp(r.Branch), DispatchedAt: strp(r.Started), Sound: strp(r.Sound),
+			Dispatched: true, Resumable: ok, Resumes: r.Resumes, Note: note})
+	}
+	return out, nil
+}
+
 func cmdList(argv []string) {
 	explicit, argv := popMachine(argv)
+	if len(argv) == 1 && argv[0] == "--json" {
+		cmdListJSON(explicit)
+		return
+	}
 	if len(argv) > 0 {
 		die("list: unexpected %s", strings.Join(argv, " "))
 	}
@@ -473,6 +556,27 @@ func cmdList(argv []string) {
 	if n > 0 {
 		warn("%d orphan(s): bowery orphans", n)
 	}
+}
+
+// cmdListJSON is list --json: every agent on every server list covers, as
+// one JSON array. No orphan count: that is orphans --json.
+func cmdListJSON(explicit string) {
+	all := []listed{}
+	for _, m := range machinesToScan(explicit) {
+		found, ok := onMachine(m, listMachine)
+		if !ok {
+			// Say so: an unreachable box must not read as one with no agents.
+			all = append(all, listed{Machine: strp(m), State: "unreachable",
+				Note: strp("could not be read; its agents are unknown")})
+			continue
+		}
+		for _, e := range found {
+			e.Machine = strp(m)
+			all = append(all, e)
+		}
+	}
+	b, _ := json.MarshalIndent(all, "", "  ")
+	fmt.Println(string(b))
 }
 
 func cmdMute(cmd string, argv []string) {
