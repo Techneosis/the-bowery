@@ -47,7 +47,15 @@ is what makes teardown safe.
    the default option is "No, exit", so a bare Enter quits the agent), but
    only when the folder is under a trust root; anywhere else the start fails
    and says so. bowery does not decide to trust a folder the person hasn't.
-6. **The tag** (`sound=off`, below), then **the prompt** if one was given.
+6. **The tag** (`sound=off`, below), then **the prompt** if one was given,
+   and **the start check**: herdr's `agent prompt` can return with the text
+   typed into the composer and never submitted, and an agent sitting idle
+   says nothing. So dispatch waits up to 60s for the agent to leave idle
+   (working, blocked or done), sends one more Enter if it hasn't, and gives
+   it 15s more. Still idle, it exits 1 and says so, and leaves the agent up:
+   the prompt is in its composer, and tearing it down would lose the one
+   thing a person needs to see. `--wait` skips it (herdr already saw it
+   settle), and so does `--no-start-check`.
 7. **The record**, then the JSON line on stdout.
 
 A start that fails at any step undoes what it made (the pane, through the

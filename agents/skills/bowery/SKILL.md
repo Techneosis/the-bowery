@@ -112,6 +112,12 @@ Lowercase, digits, `-`, `_`. Short and role-shaped: `rt-code`, `inv-data`,
 - `-- <prompt>` submits right after start. Add `--wait` to block until the
   agent settles (idle, done or blocked). Without it, poll later with
   `herdr agent wait <name> --until done --until blocked --timeout <ms>`.
+- dispatch then checks the agent started on the prompt: still idle after
+  60s, it gets one more Enter, and still idle 15s after that, dispatch exits
+  1 with "agent <name> never started working; its prompt may be
+  unsubmitted". The agent is left up: `herdr agent read <name>` to see its
+  composer. `--no-start-check` skips this, for an agent you mean to leave
+  idle.
 - Follow-ups: `herdr agent prompt <name> "<text>" [--wait]`. It refuses with
   `agent_blocked` if the agent is at a dialog: `herdr agent read <name>` to
   see what it wants, `herdr agent send-keys` to answer.

@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -26,6 +27,7 @@ type startOpts struct {
 	reused                                                       bool // resume, in the agent's own terminal
 	launcherSet                                                  bool
 	gated, wait                                                  bool
+	noStartCheck                                                 bool
 	branch, base                                                 string
 	also, prompt                                                 []string
 	machine, as                                                  string
@@ -108,6 +110,8 @@ func parseStart(argv []string) startOpts {
 			o.gated = true
 		case "--wait":
 			o.wait = true
+		case "--no-start-check":
+			o.noStartCheck = true
 		case "--":
 			o.prompt = argv[i+1:]
 			i = len(argv)
@@ -350,8 +354,81 @@ func cmdDispatch(argv []string) {
 		if err := herdr(nil, args...); err != nil {
 			upBut("its prompt", err)
 		}
+		// --wait has already seen it settle.
+		if !o.wait && !o.noStartCheck {
+			if err := checkStarted(name); err != nil {
+				fmt.Println(jsonLine(out))
+				die("%v", err)
+			}
+		}
 	}
 	fmt.Println(jsonLine(out))
+}
+
+// startCheckMS is how long checkStarted gives an agent to start working on
+// its prompt, then again (a quarter as long) after one more Enter.
+// BOWERY_START_CHECK_MS shortens it for tests.
+func startCheckMS() (int, int) {
+	first := 60000
+	if v, err := strconv.Atoi(os.Getenv("BOWERY_START_CHECK_MS")); err == nil && v > 0 {
+		first = v
+	}
+	return first, first / 4
+}
+
+// checkStarted waits for the agent to leave idle after its prompt: herdr's
+// prompt can return with the text typed into the composer and never
+// submitted, and the agent then sits idle with nothing to show for it.
+// Working, blocked or done all mean it took the prompt. Still idle at the
+// deadline: one more Enter, and if that doesn't start it either, an error.
+// The agent is left up either way: its prompt is in its composer.
+func checkStarted(name string) error {
+	first, second := startCheckMS()
+	if started, err := waitStarted(name, first); err != nil || started {
+		return err
+	}
+	if err := herdr(nil, "agent", "send-keys", name, "Enter"); err != nil {
+		return fmt.Errorf("agent %s never started working, and sending it Enter failed: %v (herdr%s agent read %s)",
+			name, herdrMsg(err), machineArg(), name)
+	}
+	if started, err := waitStarted(name, second); err != nil || started {
+		return err
+	}
+	return fmt.Errorf("agent %s never started working; its prompt may be unsubmitted: herdr%s agent read %s "+
+		"(it is still up: bowery done %s to tear it down)", name, machineArg(), name, name)
+}
+
+// waitStarted polls the agent's status for up to ms: true once it isn't idle.
+// An agent that is gone, or a status it can't read, is an error, not a wait.
+func waitStarted(name string, ms int) (bool, error) {
+	poll := time.Duration(min(1000, max(ms/20, 10))) * time.Millisecond
+	deadline := time.Now().Add(time.Duration(ms) * time.Millisecond)
+	for {
+		all, err := agents()
+		if err != nil {
+			return false, fmt.Errorf("agent %s took its prompt, but its status can't be read: %v", name, herdrMsg(err))
+		}
+		i := slices.IndexFunc(all, func(a Agent) bool { return a.Name == name })
+		if i < 0 {
+			return false, fmt.Errorf("agent %s took its prompt and is gone (herdr%s agent list)", name, machineArg())
+		}
+		switch all[i].AgentStatus {
+		case "working", "blocked", "done":
+			return true, nil
+		}
+		if !time.Now().Before(deadline) {
+			return false, nil
+		}
+		time.Sleep(poll)
+	}
+}
+
+// machineArg is " --machine <label>" for a hint to run by hand, or "".
+func machineArg() string {
+	if machine == "" {
+		return ""
+	}
+	return " --machine " + machine
 }
 
 // made is what a start created, to take back if it fails.

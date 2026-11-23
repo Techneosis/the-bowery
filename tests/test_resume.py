@@ -110,7 +110,7 @@ class Resume(Bed):
         self.assertIsNone(self.swarm(), "swarm went with its last tab")
         out = self.resume("back")
         a = self.agent("back")
-        self.assertEqual(a["agent_status"], "idle")
+        self.assertEqual(a["agent_status"], "done", "up, and it took the resume notice")
         self.assertEqual(a["args"], ["--dangerously-skip-permissions", "--resume", before["session"]])
         self.assertEqual(self.pane(a["pane_id"])["cwd"], before["cwd"], "started where the session lives")
         self.assertTrue(a["prompts"][0]["text"].startswith(NOTICE), a["prompts"])
@@ -1151,7 +1151,7 @@ class Resume(Bed):
         self.resume("dead")
         out = self.ok("orphans")
         self.assertNotIn("dead:", out, "a resumed agent is alive: no longer a dead record")
-        self.assertEqual(out.count("dead  idle"), 1, "listed once, as a live agent")
+        self.assertEqual(out.count("dead  done"), 1, "listed once, as a live agent (done: it took the resume notice)")
         js = json.loads(self.ok("orphans", "--json"))
         self.assertEqual([o["resumes"] for o in js if o["kind"] == "agent" and o["name"] == "dead"], [1])
 

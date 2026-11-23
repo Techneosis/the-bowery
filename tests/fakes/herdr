@@ -23,6 +23,10 @@ What it models, because bowery's behaviour depends on it:
   session, otherwise it gets a new one;
 - `pane process-info` reports a real pid when a test gives the pane one
   (`pid`), so bowery can read that process's environment;
+- `agent prompt` submits the prompt and the agent runs it at once (status
+  done); FAKE_PROMPT_UNSUBMITTED=<n> leaves it typed in the composer and the
+  agent idle instead, until <n> bare Enters have been sent ("never": no Enter
+  submits it), as real claude sometimes does with a prompt sent too early;
 - `pane run`: `sleep ...` occupies the pane's foreground (process-info shows
   it), `exec <cmd> <who>` turns the pane's shell into whatever environment
   `<cmd> <who> env` prints, anything else runs under bash with the pane's
@@ -374,7 +378,13 @@ def run(s, argv):
             out(cid, {"type": "agent_read", "read": {"text": a["screen"]}})
         if verb == "send-keys":
             keys = args[1:]
-            if a["screen"] == TRUST:
+            if keys == ["Enter"] and a.get("unsubmitted"):
+                a["unsubmitted"] -= 1
+                if a["unsubmitted"] == 0:
+                    a["agent_status"] = "done"
+                a.setdefault("enters", 0)
+                a["enters"] += 1
+            elif a["screen"] == TRUST:
                 if keys == ["Down", "Enter"] and os.environ.get("FAKE_TRUST_STUCK") != "1":
                     s["trusted"].append(pane(s, a["pane_id"])["cwd"])
                     a["agent_status"], a["screen"] = "idle", "> "
@@ -393,6 +403,12 @@ def run(s, argv):
             if a["agent_status"] == "blocked":
                 err(cid, "agent_blocked", f"agent {name} is blocked")
             a["prompts"].append({"text": args[1], "wait": "--wait" in args})
+            held = os.environ.get("FAKE_PROMPT_UNSUBMITTED")
+            if held:
+                a["unsubmitted"] = 10**9 if held == "never" else int(held)
+                a["screen"] = "> " + args[1]
+            else:
+                a["agent_status"] = "done"
             save(s)
             out(cid, {"type": "ok"})
     if noun == "worktree" and verb == "create":

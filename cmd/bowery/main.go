@@ -76,6 +76,10 @@ options
   --timeout <MS>           readiness timeout for agent start (default 60000,
                            at most 86400000: a day)
   --wait                   after the prompt, block until the agent settles
+  --no-start-check         don't check that the agent starts on its prompt.
+                           Without it, an agent still idle 60s after its
+                           prompt gets one more Enter, and if it's idle 15s
+                           after that, dispatch exits 1 (the agent stays up)
   --ticket <ID>            the work item the agent is on (DEV-551, an item
                            id): a letter or digit, then letters, digits,
                            . _ -, up to 80. Recorded, kept by resume, shown

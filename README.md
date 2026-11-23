@@ -197,6 +197,8 @@ bowery dispatch <name> [placement] [options] [-- <prompt>]
     --launcher <CMD>         start claude through a wrapper that execs it (recorded; resume reuses it)
     --timeout <MS>           readiness timeout (default 60000, at most a day: 86400000)
     --wait                   block until the agent settles after its prompt
+    --no-start-check         don't check that it starts on its prompt (otherwise: idle
+                             60s after it, one more Enter; idle 15s after that, exit 1)
 
 bowery done <name|pane|path>...   bring them home  [--force] [--keep-worktree] [--keep-branch] [--dry-run] [--machine L]
 bowery resume <name> [--swarm|--workspace] [--space LABEL] [--gated|--ungated] [--launcher CMD|--no-launcher] [--fresh] [--if-dead] [--not-within DUR] [--json] [--machine L] [--timeout MS] [--dry-run] [-- <prompt>]   bring a dead one back
