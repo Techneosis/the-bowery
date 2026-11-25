@@ -11,12 +11,12 @@ import (
 const usage = `bowery: send agents out into herdr, and bring them home with done.
 
   bowery dispatch <name> [placement] [options] [-- <prompt>]
-  bowery done <name|pane|worktree-path>... [--force] [--keep-worktree] [--keep-branch] [--dry-run]
+  bowery done <name|pane|worktree-path>... [--force] [--keep-worktree] [--keep-branch] [--dry-run] [--machine L]
   bowery resume <name> [--swarm|--workspace] [--space LABEL] [--gated|--ungated] [--launcher CMD|--no-launcher]
                 [--fresh] [--if-dead] [--not-within DUR] [--json] [--machine L] [--timeout MS] [--dry-run] [-- <prompt>]
   bowery watch <config> [--poll 30s] [--max 45m]   (bowery watch --help)
   bowery place --kind <KIND> [job options] [-- <prompt>]
-  bowery place --retry | bowery queue [--json] | bowery office ls|describe|log ...
+  bowery place --retry | bowery queue [--json] | bowery office ls|describe|log|stop ...
   bowery peers [--json]
 
 dispatch: make (or take) a pane, start the agent, tag it quiet, optionally
@@ -95,7 +95,7 @@ says so. A start that fails takes back whatever it made.
 placement (offices: see docs/design.md, "Placement into offices")
   dispatch <name> --job-kind <KIND> [--office O] [--scope S] [--needs K=V]
                   [--asked-by P] [--priority P] [--pin O] [--tag K=V]
-                  [--surface T:S] [--worktree B] [--base R] [-- <prompt>]
+                  [--surface T:S] [--worktree B] [--base R] [--ticket ID] [-- <prompt>]
                            any of these makes the dispatch a placement: the
                            resolver picks an office (--office pins one), the
                            placement goes to its inbox, and the office's
@@ -105,7 +105,7 @@ placement (offices: see docs/design.md, "Placement into offices")
         qualifications=..|repo=owner/name@mode] [--effects E,..] [--credit C]
         [--asked-by P] [--priority P] [--pin O] [--office O] [--tag K=V]
         [--surface T:S] [--profile P] [--repo R] [--branch B] [--base R]
-        [--expires DUR] [--id ID] [--name N] [-- <prompt>]
+        [--expires DUR] [--id ID] [--name N] [--ticket ID] [-- <prompt>]
                            run the resolver. Prints one JSON line:
                            {"placed": {office, machine, region, id, why,
                            skipped, stages}} exit 0; {"queued": {job,
@@ -120,8 +120,9 @@ placement (offices: see docs/design.md, "Placement into offices")
   peers [--json]           each peer region this one declares: its pinned key,
                            whether its catalogs verify, and the offices it
                            published to this region (the only ones placed into)
-  office ls|describe <O>|log <O> [--since DUR]
-                           the office host's answers (office --help)
+  office ls|describe <O>|log <O> [--since DUR]|stop <O> <job>
+                           the office host's answers, and the owner's stop
+                           (office --help)
 
 other commands
   done <target>...         tear an agent down: its pane, the tab or workspace

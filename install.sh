@@ -135,6 +135,7 @@ links=(
   "$src/build/bowery:$bin/bowery"
   "$src/build/office:$bin/office"
   "$src/completions/bowery.bash:$comp/bowery"
+  "$src/completions/bowery.bash:$comp/office"  # bash-completion loads by command name
 )
 
 link() {  # link <from> <to>, refusing to clobber anything that isn't a link

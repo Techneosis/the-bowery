@@ -1,6 +1,6 @@
 ---
 name: bowery
-description: Dispatch herdr agents with bowery: start them (locally or on a saved herdr machine), tag them quiet, prompt them, collect results, and tear them down with `bowery done`. Use whenever the user says "dispatch" (an agent, a reviewer, a red-teamer, N workers), whenever you decide to hand part of a task to a separate herdr agent instead of an in-process subagent, whenever a dispatched agent finishes (tear it down), whenever a dispatched agent died or was closed with its work unfinished (resume it), and whenever asked what's been left behind (orphans). Covers the one command to use, the swarm workspace, worktrees, remote dispatch with --machine/--as, the sound tag, naming, prompting and waiting, teardown, resuming a dead agent, and the herdr worktree-group hazard.
+description: Dispatch herdr agents with bowery: start them (locally or on a saved herdr machine), tag them quiet, prompt them, collect results, and tear them down with `bowery done`. Use whenever the user says "dispatch" (an agent, a reviewer, a red-teamer, N workers), whenever you decide to hand part of a task to a separate herdr agent instead of an in-process subagent, whenever a dispatched agent finishes (tear it down), whenever a dispatched agent died or was closed with its work unfinished (resume it), whenever asked what's been left behind (orphans), whenever work should go to an office instead of a pane (place), and whenever agents, PRs or CI runs in flight need watching (watch). Covers the one command to use, the swarm workspace, worktrees, remote dispatch with --machine/--as, the sound tag, naming, prompting and waiting, teardown, resuming a dead agent, placing a job into an office and reading its exit, bowery watch and its watch.d kinds, and the herdr worktree-group hazard.
 ---
 
 # Dispatching agents with bowery
@@ -253,32 +253,92 @@ record already points at it: send the notice yourself, or `done` it.
 ## Placing a job into an office
 
 Where offices are set up (an `office` host and a region file on the
-machine), work can go to an office instead of a pane: `bowery place --kind
-<kind> [--needs tools=git] [--pin <office>] -- "<prompt>"`, or `bowery
-dispatch <name> --job-kind <kind> [--office <office>] -- "<prompt>"`. The
-office's own rules decide when it takes the job, and its surface starts the
-agent. Read the exit, never re-implement a rule:
+machine), work can go to an office instead of a pane. **Which to use:**
 
-- **0** placed: the JSON names the office and the job id.
-- **4** waiting: `queued.waiting_for` says which office and why. Tell the
+- **`dispatch`** (no job flags) when *you* start the agent and will watch it,
+  collect it and `done` it: it runs now, as you, in a pane you choose.
+- **`place`** (or `dispatch <name>` with a job flag) when the work belongs to
+  an office: it must run as that office's user, with what it holds (repos,
+  tools, secrets), and only when its rules let it (office hours, a gate, a
+  budget). You don't pick the pane or the time; the office does, and its
+  surface starts the agent. You don't `done` a placed job either.
+
+```bash
+bowery place --kind <kind> [--needs tools=git] [--pin <office>] [--ticket <ID>] -- "<prompt>"
+bowery dispatch <name> --job-kind <kind> [--office <office>] [--ticket <ID>] -- "<prompt>"
+```
+
+In `dispatch`, `--kind` stays the agent kind (claude); the job's kind is
+`--job-kind`, and `--office`, `--scope`, `--needs`, `--asked-by`,
+`--priority`, `--pin`, `--tag` or `--surface` also make it a placement.
+Then only `--worktree`, `--base` and `--ticket` may go with them, and
+`--machine` is refused (`--office` pins it instead). `--ticket <ID>` is
+carried on the job as its `ticket` tag. The office's own rules decide when it
+takes the job. Both print one JSON line; read the exit, never re-implement a
+rule:
+
+- **0** placed: `{"placed": {"office", "machine", "region", "id", "why",
+  "skipped", "stages"}}`. `id` is the job id.
+- **4** waiting: `{"queued": {"job", "waiting_for", "retry_after",
+  "told"}}`. `waiting_for` is `"<office>: <reason>"` (or "no office
+  answers"), `retry_after` when the office said when it might open, `told`
+  who was just told (the asker, and the closed office's owner). Tell the
   person that, then leave it: `bowery place --retry` (run on a timer, or when
-  the office opens) sends it on. Don't dispatch it elsewhere by hand.
-- **3** refused by policy (a reserved effect): it needs a person.
-- **1** an error, or `unplaceable`: no office holds what it needs. That's a
-  setup gap to report, not something to retry.
+  the office opens) sends it on, and `bowery queue` lists what's waiting.
+  Don't dispatch it elsewhere by hand.
+- **3** `{"refused": {"job", "reason"}}`: a reserved effect, refused by
+  policy. It needs a person.
+- **1** an error, or `{"unplaceable": {"job", "reason", "candidates"}}`: no
+  office holds what it needs. That's a setup gap to report, not something to
+  retry.
 
 Once placed, the office keeps watching: if its rules or its owner close it,
 a running job is held where it is (its work kept) and resumes there when it
 opens. A held job is never yours to re-place: `bowery office describe
-<office>` shows it held and why. Only the owner ends one (`bowery office
-stop <office> <job>`).
+<office>` shows it held and why, and `bowery office log <office> [--since
+1h]` what happened. Only the owner ends one (`bowery office stop <office>
+<job>`).
 
 Every placement is signed with the asker's key (`[placement] keys` in
-bowery's config): "no signing key for X" is a setup gap to report, not a
-reason to place as someone else. Offices in another region are reached only
-when both regions declare each other; `bowery peers` shows each peer, whether
-its catalog verifies, and the offices it lets this region use. An office not
-listed there doesn't exist for you: don't try to reach it another way.
+bowery's config, or your own `~/.ssh/id_ed25519`): "no signing key for X" is
+a setup gap to report, not a reason to place as someone else. Offices in
+another region are reached only when both regions declare each other;
+`bowery peers` shows each peer, whether its catalog verifies, and the
+offices it lets this region use. An office not listed there doesn't exist
+for you: don't try to reach it another way.
+
+## Watching what's in flight (`bowery watch`)
+
+When you have agents, PRs or CI runs in flight, don't poll them in a loop
+of your own. Write what you're waiting on to a file and run `bowery watch
+<file>` in the background: it polls (`--poll 30s`) and **exits** as soon as
+something worth acting on changes, so its exit is your wake-up. Then act,
+update the file to what's in flight now, and start it again.
+
+```
+repo owner/app                 # for the pr and run lines below
+machine swarm-box              # agent lines below are on that machine ("local" = this one)
+agent fixer                    # idle | done | blocked | gone (working is quiet)
+pr 412                         # OPEN | MERGED | CLOSED, with /CONFLICTING
+run ci.yml feature-x           # the latest run on a branch or commit (queued, in_progress quiet)
+ticket T-12                    # any other kind: ~/.config/bowery/watch.d/ticket T-12
+```
+
+It prints `CHANGED:` (the lines that changed) and `ALL:` (every line), or
+`STILL BLOCKED:` on its first poll when an agent is already at a dialog, or
+`HEARTBEAT` after `--max` (45m) with nothing worth waking for: re-arm it
+then too. State is kept beside the file (`<file>.state`), so a re-armed
+watch wakes only on what changed since the last one. Every kind reports a
+coarse state, never progress text.
+
+**A kind of your own** is an executable at `~/.config/bowery/watch.d/<kind>`,
+run as `<kind> <key...>` with `BOWERY_WATCH_MACHINE` and `BOWERY_WATCH_REPO`
+set. Its last line of stdout is the value; a leading `~` marks that value
+quiet (it never wakes the watch on its own); a non-zero exit or no output
+is a transient `?`, which never wakes it. A kind with no script is
+`unknown-kind`; a line added since the last run starts quiet, so wakes only
+when it changes after that. `bowery watch
+--help` has the details.
 
 ## Remote dispatch (`--machine`, `--as`)
 

@@ -14,22 +14,26 @@ Code setup.
 | `cmd/bowery/done.go` | `done` (checks, then teardown) and `adopt` |
 | `cmd/bowery/orphans.go` | `orphans` (read-only), `list`, `mute`/`unmute` |
 | `cmd/bowery/resume.go` | `resume`: its checks, where it lands, the hands-off check |
-| `cmd/bowery/watch.go` | `watch`: the background watcher and its kinds |
+| `cmd/bowery/watch.go` | `watch`: the background watcher, its kinds and `watch.d` scripts |
+| `cmd/bowery/upgrade.go`, `version.go` | `upgrade [--check]` and the version string |
 | `cmd/bowery/herdr.go` | the herdr CLI and socket, and the group-safe pane close |
 | `cmd/bowery/machine.go` | `--machine`: the current server, ssh, paths on the box |
 | `cmd/bowery/records.go` | dispatch records, and which server a name lives on |
 | `cmd/bowery/place.go` | `place`, `queue`, `office`, `peers`, and dispatch's job flags: the resolver, signing and sealing, peers' catalogs |
 | `cmd/office/` | the office host: `open/close [--now]/clear`, `describe` (and `--probe`), `pull` (the run phase, then the inbox; `--loop` long-polls), `stop/done/yielded`, `record` (the recorder), `log`, `check`, `ls`, `publish` (catalogs to peers) |
 | `cmd/rules/hours/` | the reference rule plugin (exec kind, contract 1) |
-| `internal/offices/` | shared by both: config files, state, placements, holdings checks, the evaluator, state-file gates, facts, running work and the run phase, the transport, the pull job, the root-mode guards, SSH signatures (`sshsig.go`, `ssh-keygen -Y` format, ed25519, stdlib only), letters and signers (`letter.go`), peer catalogs (`catalog.go`) |
-| `completions/` | bash completion |
+| `internal/offices/` | shared by both: config files, state, placements, holdings checks, the evaluator, state-file gates, facts, running work and the run phase, the transport, the pull job, the root-mode guards, SSH signatures (`sshsig.go`, `ssh-keygen -Y` format, ed25519, stdlib only), letters and signers (`letter.go`), peer catalogs (`catalog.go`), the logs (`log.go`), the root and dev-mode layouts (`paths.go`), the inbox wait (`watch_linux.go` inotify, `watch_other.go` polling) |
+| `completions/` | bash completion, for `bowery` and `office` (installed under both names) |
 | `agents/` | what ships to users' Claude Code: the skill, and the CLAUDE.md snippet |
 | `examples/config.toml` | every config key, with its default |
+| `examples/offices/` | one region, machine and office, annotated, at their root-mode paths (adapt them under `OFFICE_ROOT/etc` to try it: the machine name must be this host's) |
+| `docs/releases/` | per-release notes, used by the release workflow instead of generated ones |
 | `install.sh` | piped/downloaded fetches a release, a checkout builds, an unpacked release installs its binary; `--claude-only` touches only Claude Code |
 | `scripts/package.sh` | builds and packages every release target, plus `SHA256SUMS` |
 | `tests/test_offices.py` | offices in dev mode (`OFFICE_ROOT`), with the real hours plugin and a scripted one |
 | `tests/test_offices_run.py` | rules on the machine: state-file gates, facts, the run phase and `on_closed`, owner overrides, the long-poll |
 | `tests/test_offices_regions.py` | two dev-mode regions on one machine: signed and sealed placements, peer rules, pinned keys, catalogs, revocation, stage times across the hop (keys from `tests/_keys.py`, signed with the real `ssh-keygen`) |
+| `tests/test_offices_rv.py` | M2's review findings: future-dated gates, a past `retry_after`, mid-pass events, `done` during the run phase |
 | `tests/test_offices_review.py` | integrity beats the owner, the decisions log and recorder, fd exec, process groups, replay replies (root-mode halves in `internal/offices/rootmode_test.go`) |
 | `tests/` | `python3 -m unittest discover tests` and `go test ./...`: black-box, fake herdr and ssh (`tests/fakes/`), real git. Run before every commit |
 | `tests/live/dispatch.sh` | the same story against a real throwaway herdr server and real claude agents; run by hand when herdr changes or the fake does |

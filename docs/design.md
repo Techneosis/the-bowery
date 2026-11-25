@@ -447,6 +447,36 @@ a non-login ssh session has a short PATH, so give a full path.
 `--split`, `--tab` and `--from` are refused with `--machine`: they mean
 "beside your pane", which is local.
 
+## Watch
+
+`bowery watch <config>` is for an orchestrator with several things in
+flight: instead of polling them itself, it starts the watch in the
+background and is woken by its exit. Each config line is `<kind> <key>`;
+`machine <label>` and `repo <owner/name>` set the machine and repo for the
+lines after them. Built-in kinds: `agent` (herdr's status, one `agent list`
+per machine per poll; `gone` when absent, `?` when herdr can't be read),
+`pr` (`gh pr view`: state, plus `/CONFLICTING` when open and conflicting;
+`UNKNOWN` mergeability after a push is ignored), `run` (the latest run of a
+workflow on a branch, or on a commit for a hex ref of 7 or more). Any other
+kind runs `~/.config/bowery/watch.d/<kind> <key...>` with
+`BOWERY_WATCH_MACHINE` and `BOWERY_WATCH_REPO`; its last line of stdout is
+the value (a tool's notice can come first), a leading `~` marks it quiet,
+and a non-zero exit or empty output is `?`. A missing script is
+`unknown-kind`.
+
+Every value is coarse (a state, never progress text), so the watch wakes on
+transitions, not narration. A line wakes it when its value differs from the
+last one seen, unless the new value is quiet (working, queued, in progress)
+or `?`, which is a failed read and never a change. The last values are kept
+in `<config>.state` (a `?` is never written), so a re-armed watch compares
+against what the last one saw; a line not seen before, or a first run with
+no state, records without waking. One exception: on its first poll, an
+agent already `blocked` exits at once (`STILL BLOCKED:`), since a dialog
+nobody answers is the costliest thing to sleep through. Otherwise it exits
+with `CHANGED:` and `ALL:`, or `HEARTBEAT` after `--max`, so a watch that
+died can't pass for a quiet one. Polling `agent` lines also refreshes the
+records' session ids, like `list`.
+
 ## Placement into offices
 
 An **office** is one Unix user on one machine, with a root-owned record of
@@ -510,8 +540,10 @@ publishes it until then.
 
 `bowery place` (or `dispatch` with a job flag) builds a job, refuses a
 reserved effect (exit 3), and goes over the region's offices: excluded by
-`consider`, a pin or `never`; passed over if on another machine (only this
-machine's offices are reachable yet) or if `office describe` doesn't answer;
+`consider`, a pin or `never`; passed over if it is one of this region's
+offices on another machine (of this region, only this machine's offices are
+reachable yet; a peer's are, through its catalog) or if `office describe`
+doesn't answer;
 filtered on what each office holds (the same `Mismatch` function the office
 uses when it accepts); then a published office-wide `closed`, else a probe
 (`office describe --probe`, the job on stdin), which the office answers by
@@ -543,6 +575,14 @@ an address, publish a catalog to a peer, read the catalogs peers sent),
 picked by name in the machine file and bowery's config; the built-in one,
 `dir`, makes each box a directory under `var/boxes/` and takes another
 region's var directory as an address. Nothing else knows how letters travel.
+An empty address is this region's own, so a peer with none is never sent
+to, published to or replied to: the resolver marks it unreachable, `office
+publish` reports it, and a reply is logged `reply-failed`. A box or catalog
+directory is read only for regular files of at most 4 MiB, opened without
+following a symlink and without blocking, so a FIFO, a symlink or a huge
+file there is passed over, not read. When the pull job files a letter
+(accepted, refused, dropped) it writes the bytes it verified, atomically,
+never whatever is at the path by then.
 
 `office pull <office>` is the office's pull job. For each letter, in priority
 order: an unreadable one, or one not signed by a key its signers file lists,
@@ -683,6 +723,8 @@ Without one it places nothing (exit 1). The office checks the signature
 against its signers file, which is `ssh-keygen`'s allowed_signers format
 (`principals [namespaces="…"] ssh-ed25519 <key>`; patterns and other options
 are refused, and `office check` reports a line that can never verify). A
+namespaces list is comma-separated inside its quotes (`namespaces="placement,
+offices-catalog"`): the option list splits only on commas outside quotes. A
 principal of the office's own region is written bare; one from a peer region
 `<principal>@<region>`, so the same name in two regions is two signers, and a
 peer's principal can't pass as a local one by leaving out `from` (the key
@@ -699,8 +741,10 @@ asker's signature, checks: the region is a peer, the seal verifies and is by
 the pinned key, and the office is in `may_place`. Any of those failing is a
 refusal, replied to the asker at the peer's address if the peer is still
 declared (otherwise logged `reply-failed`). Then the usual checks, and the
-accept-phase rules with the peer's rules added (logged with source `peer`);
-a closed peer rule keeps the placement waiting like any other rule.
+accept-phase rules with the peer's rules run first (logged with source
+`peer`), so when one of them closes, its reason and its `on_closed` are the
+ones that count; a closed peer rule keeps the placement waiting like any
+other rule.
 
 **Revoking is one edit.** Every evaluation of a peer's job, at every phase,
 also checks the link as it stands now: the entry is there, `may_place` still

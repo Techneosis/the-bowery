@@ -88,9 +88,13 @@ class CheckoutInstall(unittest.TestCase):
             v = subprocess.run([str(b), "version"], capture_output=True, text=True)
             self.assertIn("bowery ", v.stdout)
             self.assertTrue((Path(h) / ".local/share/bash-completion/completions/bowery").is_symlink())
+            oc = Path(h) / ".local/share/bash-completion/completions/office"
+            self.assertTrue(oc.is_symlink())  # bash-completion loads by command name
+            self.assertEqual(os.path.realpath(oc), str(ROOT / "completions" / "bowery.bash"))
             p = subprocess.run([INSTALL, "--uninstall"], env=env, capture_output=True, text=True, stdin=subprocess.DEVNULL)
             self.assertEqual(p.returncode, 0, p.stderr)
             self.assertFalse(b.exists() or b.is_symlink())
+            self.assertFalse(oc.is_symlink())
 
 
 if __name__ == "__main__":

@@ -21,14 +21,15 @@ bowery orphans
 ## Joining Up
 
 **Requirements:** Linux or macOS, [herdr](https://herdr.dev) (0.9.5 or later),
-git. One static binary, nothing else to install.
+git. Static binaries (`bowery`, and `office`, the office host), nothing else
+to install.
 
 ```
 curl -fsSL https://raw.githubusercontent.com/Techneosis/the-bowery/main/install.sh | bash
 ```
 
 That fetches the latest release for your machine, checks it against the
-release's SHA-256 sums, and installs it: the binary in `~/.local/bin` and tab
+release's SHA-256 sums, and installs it: the binaries in `~/.local/bin` and tab
 completion. To upgrade, `bowery upgrade` (or run the one-liner again);
 `bowery upgrade --check` only asks, and exits 3 when there is a newer release.
 Options go after `bash -s --`:
@@ -40,7 +41,7 @@ curl -fsSL …/install.sh | bash -s -- --uninstall       # leave (records and co
 ```
 
 **From source** (needs Go): `git clone` this repository and run `./install.sh`
-in it. It builds the binary and links everything into the checkout, so edits
+in it. It builds the binaries and links everything into the checkout, so edits
 are live.
 
 If you use Claude Code, the installer also hands your agents the network's
@@ -218,7 +219,7 @@ agent keeps its desk, its papers and its claimed work, and nobody else is
 sent in to start it over: when the door opens again it is checked in again
 and carries on where it was. While someone is held, no new job starts.
 `office close --now` stops everyone at once (work kept), and `office stop`
-sends a held agent home for good.
+sends one agent home for good, at work or held.
 
 The office takes in its post with a **long-poll**: it sits by the letterbox
 and wakes the moment a letter lands, glances at its signs every `--interval`,
@@ -254,6 +255,8 @@ office close region-a-reviews --now         # and stop the work in progress, kep
 office stop region-a-reviews rev-12         # send a held agent home
 office pull region-a-reviews --loop         # the office taking in its post
 office log region-a-reviews --since 1h      # the daybook and the decisions book
+office check region-a-reviews               # is the office fit to open: plugins, pins, signers, peers
+bowery queue                                # who is on the waiting bench, and for whom
 office publish                              # post each peer district its signed list
 bowery peers                                # what the other districts post to us
 ```
@@ -298,14 +301,26 @@ bowery list [--machine L] [--json]   agents, quiet or loud, who can be resumed, 
 bowery mute|unmute <name|pane>... set or clear the sound=off tag
 bowery swarm-tab <label> [--cwd DIR] [--machine L]   a rooftop tab with no agent; prints its pane
 bowery swarm-last                 move the swarm workspace to the bottom
+bowery watch <list> [--poll 30s] [--max 45m]   the lookout: exits when something on the list changes
+bowery place --kind <KIND> [--needs K=V] [--pin O] [--ticket ID] [...] [-- <prompt>]   to an office (0 placed, 4 waiting, 3 refused, 1 error)
+bowery dispatch <name> --job-kind <KIND> [--office O] [...] [-- <prompt>]   the same, from dispatch
+bowery place --retry              send waiting jobs on; drop the expired
+bowery queue [--json]             the waiting bench
+bowery peers [--json]             the other districts, and the offices they post to us
+bowery office ls|describe <O>|log <O> [--since DUR]|stop <O> <job>   ask the office host
 bowery config                     the settings in force
 bowery upgrade [--check]          install the latest release
 bowery version
 ```
 
 `dispatch` prints one line of JSON: `{"name", "pane_id", "workspace_id",
-"tab_id", "sound"}`, plus `"worktree"` and `"branch"` with `--worktree`, and
-`"machine"` and `"as"` with `--machine`.
+"tab_id", "sound"}`, plus `"worktree"` and `"branch"` with `--worktree`,
+`"machine"` and `"as"` with `--machine`, and `"ticket"` with `--ticket`. With
+a job flag it prints `place`'s line instead. Every command exits 0 when it did
+what was asked and 1 when it didn't (a `done` that refused, a dispatch whose
+agent never started on its prompt), except `place` (4 waiting, 3 refused) and
+`upgrade --check` (3: a newer release is out). `bowery --help`, `office
+--help` and `bowery watch --help` have every flag.
 
 ---
 
@@ -329,13 +344,20 @@ identity_command = "~/bin/as"   # `as <who> [argv]`; exports identity_env=<who>
 identity_env = "BOWERY_AS"
 # ssh = "swarm-box"             # default: the herdr profile's target
 # trust_roots = ["~/dev"]       # on the box; default: the top-level list
+
+[placement]                     # only for offices; all of it optional
+# consider.regions = ["region-a"]          # own region by default; peers by name
+# keys = { alice = "~/.ssh/id_ed25519" }   # who signs as whom (default: you, ~/.ssh/id_ed25519)
+# region_key = "~/.config/bowery/keys/region-a"   # seals letters sent across the river
+# [placement.kinds.review]                 # defaults for one kind of job
+# surface = "herdr:reviewer"
 ```
 
 The environment can point the network elsewhere, for tests and for running
 several setups side by side: `BOWERY_STATE` (the records),
 `BOWERY_WORKTREE_ROOT` (instead of herdr's worktrees dir), `BOWERY_TRUST_ROOTS`
 (more trust roots, `:`-separated), `BOWERY_RELEASES` (where upgrades come
-from).
+from), and `OFFICE_ROOT` (offices in dev mode, under one directory).
 
 **Hooking in.** The Bowery beeps nothing and orders nothing on its own; herdr
 plugins of yours can. A sound plugin skips panes whose `sound` token is `off`;
@@ -366,43 +388,51 @@ sits between marker comments, so a later install updates it in place and
 
 ---
 
-## The Premises
+## The Lookout
 
-| | |
-|---|---|
-| `cmd/bowery/` | the whole network: one static Go binary |
-| `cmd/office/`, `cmd/rules/hours/` | the office host, and its reference rule (office hours) |
-| `internal/offices/` | what both share: the records, placements, the rule contract and its evaluator |
-| `completions/bowery.bash` | tab completion |
-| `agents/` | the Standing Orders (a Claude Code skill) and the `CLAUDE.md` notice |
-| `examples/config.toml` | every arrangement, with its default |
-| `tests/` | rehearsals: `python3 -m unittest discover tests` (fake herdr, real git) |
-| `tests/live/` | the same against a real herdr and real agents, by hand |
-| `~/.local/state/bowery/` | the book |
-
-How it works, plainly, and why: [docs/design.md](docs/design.md).
-
-MIT licensed.
-
-## Watching what's in flight
-
-An orchestrator that has agents, PRs and CI runs in flight shouldn't poll
-them in a loop. `bowery watch <config>` does it in the background and exits
-as soon as something worth acting on changes, so the exit is the wake-up:
+A courier network with errands out shouldn't have its dispatcher pacing the
+street. `bowery watch <list>` puts a lookout on the roof: it keeps an eye on
+everything on the list (couriers, pull requests, CI runs) in the background
+and **calls down the moment something worth acting on changes**, by exiting.
+The exit is the wake-up:
 
 ```
 repo acme/web
-machine swarm-box                  # agent lines below are on that machine
+machine swarm-box                  # courier lines below are on that machine
 agent fixer                        # idle | done | blocked | gone (working is quiet)
 pr 412                             # OPEN | MERGED | CLOSED, /CONFLICTING
 run ci.yml feature-x               # latest run on a branch or commit (in progress is quiet)
 ticket T-12                        # anything else: ~/.config/bowery/watch.d/ticket T-12
 ```
 
-It prints `CHANGED:` with the lines that changed and `ALL:` with everything,
-`STILL BLOCKED:` when an agent is at a dialog, or `HEARTBEAT` after `--max`
-(45m) with nothing worth waking for. Every kind reports a coarse state, never
-progress text, so it wakes on transitions rather than narration. A kind of
-your own is a script in `watch.d`: its last line of output is the value, and a
-leading `~` marks it quiet. `bowery watch --help` has the details.
+It calls `CHANGED:` with the lines that changed and `ALL:` with everything,
+`STILL BLOCKED:` when a courier is already stuck at a dialog, or `HEARTBEAT`
+after `--max` (45m) with nothing worth calling about, so a lookout who fell
+asleep can't go unnoticed. Every kind reports a coarse state, never progress
+text, so it calls on transitions rather than narration. What it last saw is
+kept beside the list (`<list>.state`): post a new lookout with the list
+brought up to date, and it calls only on what changed since. A kind of your
+own is a script in `watch.d`: its last line of output is the value, a leading
+`~` marks it quiet, and a failure is `?`, which never calls. `bowery watch
+--help` has the details.
 
+---
+
+## The Premises
+
+| | |
+|---|---|
+| `cmd/bowery/` | the whole network: one static Go binary |
+| `cmd/office/`, `cmd/rules/hours/` | the office host, and its reference rule (office hours) |
+| `internal/offices/` | what both share: the records, placements and letters, the rule contract and its evaluator, signatures, the transport, peers' catalogs |
+| `completions/bowery.bash` | tab completion, for `bowery` and `office` |
+| `agents/` | the Standing Orders (a Claude Code skill) and the `CLAUDE.md` notice |
+| `examples/config.toml` | every arrangement, with its default |
+| `examples/offices/` | one region, one machine and one office, to start from |
+| `tests/` | rehearsals: `python3 -m unittest discover tests` (fake herdr, real git) and `go test ./...` |
+| `tests/live/` | the same against a real herdr and real agents, by hand |
+| `~/.local/state/bowery/` | the book |
+
+How it works, plainly, and why: [docs/design.md](docs/design.md).
+
+MIT licensed.

@@ -18,15 +18,16 @@ trust_roots = ["~/dev"]
 # foreground processes carry one. Default: none.
 # hands_off_env = ["OTHER_TOOL_TAG"]
 
+# Identities for agents on this machine's own server, the same contract as a
+# machine's identity_command below. With it, a local dispatch may take --as;
+# without it, --as needs --machine. (Top-level keys go before the first
+# [table], or TOML puts them in it.)
+# identity_command = "~/bin/as"
+# identity_env = "BOWERY_AS"
+
 # Short names for --model. Anything not listed is passed through as written.
 [models]
 # fast = "claude-haiku-4-5"
-
-# Identities for agents on this machine's own server, the same contract as a
-# machine's identity_command below. With it, a local dispatch may take --as;
-# without it, --as needs --machine.
-# identity_command = "~/bin/as"
-# identity_env = "BOWERY_AS"
 
 # A saved herdr machine (`herdr machine list`), by its label.
 [machines.swarm-box]
@@ -64,7 +65,7 @@ identity_env = "BOWERY_AS"
 # This region's private key: seals a placement sent to a peer region.
 # region_key = "~/.config/bowery/keys/region-a"
 
-# Defaults for one job kind.
+# Defaults for one job kind (a flag on the command line wins).
 # [placement.kinds.review]
 # surface  = "herdr:reviewer"
 # priority = "normal"
