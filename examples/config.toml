@@ -40,3 +40,29 @@ identity_env = "BOWERY_AS"
 # ssh = "swarm-box"
 # Trust roots on the box (default: the top-level trust_roots).
 # trust_roots = ["~/dev", "~/src"]
+
+# Placement into offices (bowery place, and dispatch with job flags).
+[placement]
+# The regions this bowery plans over: its own (from the region file), and
+# any of the peers that file declares. Default: its own.
+# consider.regions = ["region-a"]
+# An allow list of offices; empty means every office those regions publish.
+# consider.offices = []
+# Ranking, in order. Default: prefer, holds-repo, same-machine, same-region, fewest-running.
+# rank = ["prefer", "holds-repo", "same-machine", "same-region", "fewest-running"]
+# Offices, or regions as "region:<name>", for the prefer criterion.
+# prefer = ["region:region-a"]
+# A job of this scope is never placed outside these regions.
+# never = [{ scope = "acme", outside = ["region-a"] }]
+# The placement transport, by name; the offices' machine files name the same.
+# transport = "dir"
+# The office host to ask. Default: office, on PATH.
+# office_command = "office"
+
+# Defaults for one job kind.
+# [placement.kinds.review]
+# surface  = "herdr:reviewer"
+# priority = "normal"
+# expires  = "4h"
+# pin      = []
+# prefer   = ["region-a-reviews"]

@@ -2,7 +2,8 @@
 # Build and package every release target: scripts/package.sh <version> <outdir>
 #
 # Each archive, bowery-<os>-<arch>.tar.gz, unpacks to a directory that
-# install.sh recognises as a release (a VERSION file and build/bowery), so the
+# install.sh recognises as a release (a VERSION file and build/bowery, with
+# the office host at build/office and its reference rule at build/rules/hours), so the
 # installer inside it installs that binary rather than building one.
 # SHA256SUMS covers every archive; VERSION names the release, for
 # `bowery upgrade`. The release workflow runs this; so can you.
@@ -21,8 +22,10 @@ for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
   name=bowery-$os-$arch
   dir=$work/$name
   mkdir -p "$dir/build"
-  (cd "$root" && CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath \
-    -ldflags "-s -w -X main.version=$version" -o "$dir/build/bowery" ./cmd/bowery)
+  for cmd in bowery office rules/hours; do
+    (cd "$root" && CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath \
+      -ldflags "-s -w -X main.version=$version" -o "$dir/build/$cmd" "./cmd/$cmd")
+  done
   cp -R "$root/completions" "$root/agents" "$root/examples" "$dir/"
   mkdir -p "$dir/docs"
   cp "$root/install.sh" "$root/LICENSE" "$root/README.md" "$dir/"

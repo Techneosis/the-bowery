@@ -18,12 +18,17 @@ Code setup.
 | `cmd/bowery/herdr.go` | the herdr CLI and socket, and the group-safe pane close |
 | `cmd/bowery/machine.go` | `--machine`: the current server, ssh, paths on the box |
 | `cmd/bowery/records.go` | dispatch records, and which server a name lives on |
+| `cmd/bowery/place.go` | `place`, `queue`, `office`, and dispatch's job flags: the resolver |
+| `cmd/office/` | the office host: `open/close/clear`, `describe` (and `--probe`), `pull`, `log`, `check`, `ls` |
+| `cmd/rules/hours/` | the reference rule plugin (exec kind, contract 1) |
+| `internal/offices/` | shared by both: config files, state, placements, holdings checks, the evaluator, the transport, the pull job |
 | `completions/` | bash completion |
 | `agents/` | what ships to users' Claude Code: the skill, and the CLAUDE.md snippet |
 | `examples/config.toml` | every config key, with its default |
 | `install.sh` | piped/downloaded fetches a release, a checkout builds, an unpacked release installs its binary; `--claude-only` touches only Claude Code |
 | `scripts/package.sh` | builds and packages every release target, plus `SHA256SUMS` |
-| `tests/` | `python3 -m unittest discover tests`: black-box, fake herdr and ssh (`tests/fakes/`), real git. Run before every commit |
+| `tests/test_offices.py` | offices in dev mode (`OFFICE_ROOT`), with the real hours plugin and a scripted one |
+| `tests/` | `python3 -m unittest discover tests` and `go test ./...`: black-box, fake herdr and ssh (`tests/fakes/`), real git. Run before every commit |
 | `tests/live/dispatch.sh` | the same story against a real throwaway herdr server and real claude agents; run by hand when herdr changes or the fake does |
 | `docs/design.md` | the plain-language version: why each piece is the way it is |
 

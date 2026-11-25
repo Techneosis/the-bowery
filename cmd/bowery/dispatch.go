@@ -167,6 +167,10 @@ func cmdDispatch(argv []string) {
 	if !nameRE.MatchString(name) {
 		die("agent name must be lowercase/digits/-/_ (got '%s')", name)
 	}
+	if isPlacementDispatch(argv) {
+		placeFromDispatch(name, argv)
+		return
+	}
 	o := parseStart(argv)
 	if o.machine != "" {
 		useMachine(o.machine, o.as)

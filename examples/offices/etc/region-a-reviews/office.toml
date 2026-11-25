@@ -1,0 +1,28 @@
+# The office record: /usr/local/etc/offices/<office>/office.toml (root:root
+# 0644), with the lists it names beside it. Its state (the owner's open or
+# closed) is /var/lib/offices/<office>/state, written by office open|close.
+name     = "region-a-reviews"
+region   = "region-a"
+machine  = "box-1"
+user     = "region-a-reviews"
+owner    = "alice"
+tier     = "reader"
+acts_for = ""
+kinds    = ["review"]
+profile  = "reviewer"
+surfaces = ["reviewer"]
+
+signers = "signers"          # who may place here: allowed-signers lines, principal first
+
+[holdings]
+tools = ["git"]
+repos = "repos"
+
+[rules]
+default = "closed"           # when no rule has an opinion
+
+[[rules.use]]
+name   = "work-hours"
+plugin = "hours"
+[rules.use.config]
+windows = ["Mon..Fri 09:00-17:00"]

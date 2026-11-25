@@ -447,6 +447,127 @@ a non-login ssh session has a short PATH, so give a full path.
 `--split`, `--tab` and `--from` are refused with `--machine`: they mean
 "beside your pane", which is local.
 
+## Placement into offices
+
+An **office** is one Unix user on one machine, with a root-owned record of
+what it holds and who may place work in it, and rules that decide when it is
+open. A job runs with the office's privilege and nothing more. The office
+host is a second binary, `office`; bowery's part is the resolver.
+
+### Files
+
+| file | where (root mode) | holds |
+|---|---|---|
+| region file | `/usr/local/etc/offices/region.toml` | the region's name, timezone, offices, priorities, reserved effects, tiers, naming, defaults (rule timeout, retry tick), region-wide rule instances; its key and peers are read but not used yet |
+| machine file | `/usr/local/etc/offices/machine.toml` | the machine's name, the placement transport, installed rule plugins (pinned by sha256), surfaces, machine-wide rule instances |
+| office record | `/usr/local/etc/offices/<office>/office.toml` + `repos`, `signers`, `authors` | identity, kinds, profile, surfaces, holdings, signers, `[rules]` |
+| office state | `/var/lib/offices/<office>/state` | the owner's override: open or closed, optionally `until`, `kinds`, `scope` |
+| office log | `/var/lib/offices/<office>/log` | every flip, verdict, acceptance, refusal and launch, as JSON lines |
+| `[placement]` | bowery's `config.toml` | which regions and offices to consider, ranking, per-kind defaults |
+
+Every config decoder refuses unknown keys. In root mode every config file and
+plugin must be owned by root and writable by nobody else, and `office pull`
+must run as the office's user. `OFFICE_ROOT=<dir>` is dev mode: the same
+files under `<dir>/etc` and `<dir>/var`, run as you, with exactly those three
+identity checks relaxed, and a line on every command that says so. Rules,
+placements, queues, verdicts and logs are the same code in both. The machine
+file's name must match the host in both, so a copied config refuses to act
+for another machine.
+
+### Rules
+
+A rule instance names a plugin and gives it config. Instances apply from the
+region's `[[defaults.rules]]`, the machine file's `[[rules]]` and the office's
+`[[rules.use]]`, and run in that order, concurrently, each under its own
+timeout. An `exec` plugin is one process per evaluation: the request (contract
+1) as JSON on stdin, an environment with nothing in it but its private state
+directory (`OFFICE_RULE_STATE`), working directory `/`, stdout capped at
+64 KiB, its process group killed at the deadline. Its description (`{"contract":
+1, "describe": true}`) gives its phases, contracts, history and config schema,
+and every evaluation checks the instance against it (and the config against the
+schema) before running it.
+
+The answer is decoded strictly. A plugin that doesn't match its pinned sha256,
+doesn't speak the instance's contract, times out, exits non-zero, crashes, or
+answers something that doesn't decode (an unknown field, `closed` with no
+reason, a time that isn't RFC 3339) has **failed**, and a failed rule is
+`closed` with the reason `rule <name> failed: <what>`, logged `rule-failed`.
+
+Combining: all must pass, defer drops out, and with no opinion at all the
+office's `default` decides. The reason shown is the first `closed`; the retry
+time is the latest among them, or none if any closed verdict has none. Then
+the owner's state: `close` beats every rule, `open` every rule but a `binding`
+one. `office clear` drops the override. Each instance's verdict is one log
+line (instance, plugin, its version and sha256, contract, verdict, reason,
+retry, note, ms, and the combined result), and the evaluation one more.
+
+`hours` (`cmd/rules/hours`) is the reference plugin: weekly windows in the
+office's timezone. Its verdict doesn't depend on the job, so it is office-wide
+(`holds: "office"`) until the moment it would change, and `describe`
+publishes it until then.
+
+### The resolver
+
+`bowery place` (or `dispatch` with a job flag) builds a job, refuses a
+reserved effect (exit 3), and goes over the region's offices: excluded by
+`consider`, a pin or `never`; passed over if on another machine (only this
+machine's offices are reachable yet) or if `office describe` doesn't answer;
+filtered on what each office holds (the same `Mismatch` function the office
+uses when it accepts); then a published office-wide `closed`, else a probe
+(`office describe --probe`, the job on stdin), which the office answers by
+running its own place-phase rules. Survivors are ranked (`prefer`,
+`holds-repo`, `same-machine`, `same-region`, `fewest-running`, then region and
+name). The top one gets the placement, through the transport, and bowery exits
+0. If none passes but some office was only closed (or didn't answer), the job
+waits in `~/.local/state/bowery/queue/<id>.json` with the whole filter table,
+the asker and the best closed office's owner are told once, and bowery exits
+4. If no office could take it even open, that is a setup gap: exit 1 and
+`unplaceable`, not a wait. `place --retry` retries the queue in priority
+order, oldest first, drops the expired, and prints `next_retry` for a
+scheduler. Each decision is a line in `~/.local/state/bowery/place.log`.
+
+In `dispatch`, `--kind` stays the agent kind it always was, so a job's kind
+there is `--job-kind`; `--office`, `--scope`, `--needs`, `--asked-by`,
+`--priority`, `--pin`, `--tag` and `--surface` also make it a placement. A
+placed dispatch writes no herdr record: the office's surface starts the agent.
+
+### The placement and the pull job
+
+A placement is one fenced block of `key = "value"` lines, sorted: the bytes a
+signature will cover. It is bound to one office (`office`, `machine`,
+`region`), and its id is the job's key. The transport is one interface (send
+to a box, wait on a box, reply to an asker), picked by name in the machine
+file and bowery's config; the built-in one, `dir`, makes each box a directory
+under `var/boxes/`. Nothing else knows how letters travel.
+
+`office pull <office>` is the office's pull job. For each letter, in priority
+order: an unreadable one is dropped (and answered to nobody); one for another
+office, of a kind it doesn't take, or needing something it doesn't hold, is
+refused (logged, one reply to the asker); a second copy of an accepted id is
+discarded; an expired one is dropped and the asker told. The rest are judged
+by the accept-phase rules and the owner's state: closed stays in the box
+(`place-waiting`, logged once per reason), open is accepted and started
+through the office's surface (a command from the machine file, given the job
+as JSON). `--loop` is the long-running form: it waits on the inbox through the
+transport's `Wait`, which returns on new mail or at the backstop, checks the
+owner's state and the config every `--interval`, and judges a waiting
+placement again only when its retry time comes, an event happens, or the
+region's `retry_tick` passes. A transport that can long-poll implements
+`Wait` by blocking, and the loop doesn't change.
+
+Every stage is timed: the placement carries `resolve_at`, `signed_at` and
+`sent_at`; the office logs `delivered`, `accepted` and `started` with all the
+earlier ones (`stages` on the `launched` line), and `place.log` has the
+resolver's half.
+
+### Not yet
+
+Signatures (the requester's and the region's), peers and catalogs, the
+`state-file` kind, facts, the run phase and `on_closed`, `close --now`,
+`office stop`, the wrapper and daemon, and the evaluator's own user. Until
+then: `asked_by` is checked against the office's signers by name only, and
+rule plugins run as whoever runs the evaluation.
+
 ## The worktree-group hazard
 
 `herdr worktree create` groups the new workspace under a primary workspace on

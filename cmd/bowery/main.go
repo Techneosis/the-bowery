@@ -15,6 +15,8 @@ const usage = `bowery: send agents out into herdr, and bring them home with done
   bowery resume <name> [--swarm|--workspace] [--space LABEL] [--gated|--ungated] [--launcher CMD|--no-launcher]
                 [--fresh] [--if-dead] [--not-within DUR] [--json] [--machine L] [--timeout MS] [--dry-run] [-- <prompt>]
   bowery watch <config> [--poll 30s] [--max 45m]   (bowery watch --help)
+  bowery place --kind <KIND> [job options] [-- <prompt>]
+  bowery place --retry | bowery queue [--json] | bowery office ls|describe|log ...
 
 dispatch: make (or take) a pane, start the agent, tag it quiet, optionally
 hand it a prompt, and record what was made for it. Prints JSON:
@@ -88,6 +90,34 @@ options
 Claude's folder-trust dialog is answered Yes under the trust roots (config;
 default ~/dev) and the herdr worktrees dir; anywhere else the start fails and
 says so. A start that fails takes back whatever it made.
+
+placement (offices: see docs/design.md, "Placement into offices")
+  dispatch <name> --job-kind <KIND> [--office O] [--scope S] [--needs K=V]
+                  [--asked-by P] [--priority P] [--pin O] [--tag K=V]
+                  [--surface T:S] [--worktree B] [--base R] [-- <prompt>]
+                           any of these makes the dispatch a placement: the
+                           resolver picks an office (--office pins one), the
+                           placement goes to its inbox, and the office's
+                           surface starts the agent. Same JSON and exits as
+                           place. (--kind stays the agent kind.)
+  place --kind <KIND> [--scope S] [--area A] [--needs tools=a,b|secrets=..|
+        qualifications=..|repo=owner/name@mode] [--effects E,..] [--credit C]
+        [--asked-by P] [--priority P] [--pin O] [--office O] [--tag K=V]
+        [--surface T:S] [--profile P] [--repo R] [--branch B] [--base R]
+        [--expires DUR] [--id ID] [--name N] [-- <prompt>]
+                           run the resolver. Prints one JSON line:
+                           {"placed": {office, machine, region, id, why,
+                           skipped, stages}} exit 0; {"queued": {job,
+                           waiting_for, retry_after, told}} exit 4;
+                           {"refused": ...} exit 3 (a reserved effect);
+                           exit 1 on an error or {"unplaceable": ...} (no
+                           office holds what it needs)
+  place --retry            retry every waiting job (priority, then oldest);
+                           drop the expired. Prints placed/waiting/dropped
+                           and next_retry, for a scheduler to book
+  queue [--json]           the jobs waiting for an office
+  office ls|describe <O>|log <O> [--since DUR]
+                           the office host's answers (office --help)
 
 other commands
   done <target>...         tear an agent down: its pane, the tab or workspace
@@ -187,6 +217,12 @@ func main() {
 	switch cmd {
 	case "dispatch":
 		cmdDispatch(rest)
+	case "place":
+		cmdPlace(rest)
+	case "queue":
+		cmdQueue(rest)
+	case "office":
+		cmdOffice(rest)
 	case "done":
 		cmdDone(rest)
 	case "resume":

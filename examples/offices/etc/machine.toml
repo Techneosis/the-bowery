@@ -1,0 +1,21 @@
+# The machine file: /usr/local/etc/offices/machine.toml (root:root 0644).
+machine   = "box-1"          # the office host runs only on the machine it names
+transport = "dir"            # the placement transport: boxes are directories under var/boxes
+
+# An installed rule plugin. sha256 pins it: a plugin that changed since is a
+# failed rule, which closes the office.
+[plugins.hours]
+kind      = "exec"
+path      = "/usr/local/lib/offices/rules/hours"
+sha256    = "<sha256sum of the installed binary>"
+contracts = [1]
+
+# How an accepted job is started: the command gets the job as JSON on stdin,
+# and runs as the office (the pull job's user).
+[surfaces.reviewer]
+command = ["/usr/local/lib/offices/surfaces/reviewer"]
+
+# Rule instances for every office on this machine:
+# [[rules]]
+# name = "…"
+# plugin = "…"

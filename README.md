@@ -174,6 +174,46 @@ On a shared box only couriers you sent count as yours: `orphans` doesn't list
 someone else's agents, and marks a worktree nobody here claims as "maybe
 another dispatcher's".
 
+## Offices
+
+Some errands aren't sent to a pane but **to an office**: a room on a machine
+whose owner keeps the door (`office`, the second binary). An office is one
+Unix user with a record of what it holds (tools, repos, secrets, the kinds of
+job it takes, who may send it work) and rules that say when its door is open:
+office hours, a gate, a budget. Each rule is a plugin that answers `open`,
+`closed` or `defer`; the office host knows no rule of its own.
+
+`bowery place` is the dispatcher's desk. It reads what each office on its
+round holds and asks each one (a probe, answered by the office itself) whether
+it would take the job now, then **sends a placement to the best office's
+inbox**, or, when every door that could take it is shut, **puts the job on the
+waiting bench** (`bowery queue`) and says who is being waited on. Nobody edits
+a dispatcher's config when an office closes: the job waits, and `bowery place
+--retry` sends it once a door opens. A job no office could ever take (nobody
+holds what it needs) isn't kept waiting: that's a setup gap, said plainly.
+
+The office checks every placement again when it takes it in (its pull job,
+`office pull`), runs its rules again, and only then starts the agent. A rule
+that crashes, hangs or talks nonsense counts as a shut door. Every verdict,
+every opening and closing, and the time of each stage (resolve, sign, send,
+delivered, accepted, started) is written in the office's own log and in
+bowery's `place.log`.
+
+```
+bowery place --kind review --needs tools=git -- "review PR 12"   # 0 placed, 4 waiting, 3 refused, 1 error
+bowery dispatch rev --job-kind review --office region-a-reviews -- "review PR 12"
+office close region-a-reviews --until 2h    # the owner's word beats the rules
+office open region-a-reviews
+bowery place --retry
+office pull region-a-reviews --loop         # the office taking in its post
+office log region-a-reviews --since 1h
+```
+
+`OFFICE_ROOT=<dir>` runs every office under one directory as you, for trying
+it out (dev mode, and it says so on every command); without it the offices
+live in root-owned `/usr/local/etc/offices` and `/var/lib/offices`. How it all
+fits: [docs/design.md](docs/design.md#placement-into-offices).
+
 ---
 
 ## At the Desk
@@ -282,6 +322,8 @@ sits between marker comments, so a later install updates it in place and
 | | |
 |---|---|
 | `cmd/bowery/` | the whole network: one static Go binary |
+| `cmd/office/`, `cmd/rules/hours/` | the office host, and its reference rule (office hours) |
+| `internal/offices/` | what both share: the records, placements, the rule contract and its evaluator |
 | `completions/bowery.bash` | tab completion |
 | `agents/` | the Standing Orders (a Claude Code skill) and the `CLAUDE.md` notice |
 | `examples/config.toml` | every arrangement, with its default |

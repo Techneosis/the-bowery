@@ -39,6 +39,8 @@ type Config struct {
 	HandsOffEnv []string `toml:"hands_off_env"`
 	// Per saved herdr machine (`herdr machine list`), by label.
 	Machines map[string]MachineConfig `toml:"machines"`
+	// Placement: the resolver's regions, offices and ranking (bowery place).
+	Placement PlacementConfig `toml:"placement"`
 
 	path   string
 	loaded bool

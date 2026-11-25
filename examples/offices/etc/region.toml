@@ -1,0 +1,31 @@
+# The region file: /usr/local/etc/offices/region.toml (root:root 0644), or
+# $OFFICE_ROOT/etc/region.toml in dev mode. Every machine in the region has it.
+region   = "region-a"
+owner    = "alice"
+timezone = "Europe/Lisbon"
+key      = "ssh-ed25519 AAAA… region-a"     # read, not yet used: signatures come with regions
+offices  = [{ name = "region-a-reviews", machine = "box-1" }]
+
+priorities       = ["high", "normal", "low"]   # highest first: the order waiting jobs retry in
+reserved_effects = ["spend"]                   # never placed anywhere (bowery place exits 3)
+max_expires      = "24h"
+
+[tiers.reader]
+effects = []
+holds   = ["tools", "repos"]
+
+[naming]
+user_max = 32
+box      = "office-{name}"   # the office's inbox
+
+[defaults]
+rule_timeout = "2s"          # how long a rule may take to answer
+retry_tick   = "10m"         # how often a waiting placement is judged again without an event
+# rule_default, on_closed and interval: defaults for each office's [rules]
+
+# Rule instances every office in the region carries:
+# [[defaults.rules]]
+# name   = "region-hours"
+# plugin = "hours"
+# [defaults.rules.config]
+# windows = ["Mon..Fri 08:00-20:00"]

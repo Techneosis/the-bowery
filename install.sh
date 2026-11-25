@@ -133,6 +133,7 @@ fi
 
 links=(
   "$src/build/bowery:$bin/bowery"
+  "$src/build/office:$bin/office"
   "$src/completions/bowery.bash:$comp/bowery"
 )
 
@@ -233,9 +234,12 @@ esac
 if ((build)); then
   command -v go >/dev/null \
     || { echo "building bowery from a checkout needs Go (https://go.dev/dl/); or put a binary at build/bowery and pass --no-build" >&2; exit 1; }
-  (cd "$src" && CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o build/bowery.new ./cmd/bowery)
-  mv -f "$src/build/bowery.new" "$src/build/bowery"
-  echo "built $src/build/bowery"
+  for cmd in bowery office rules/hours; do
+    mkdir -p "$(dirname "$src/build/$cmd")"
+    (cd "$src" && CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o "build/$cmd.new" "./cmd/$cmd")
+    mv -f "$src/build/$cmd.new" "$src/build/$cmd"
+    echo "built $src/build/$cmd"
+  done
 elif [[ ! -x $src/build/bowery ]]; then
   echo "--no-build, but there is no binary at $src/build/bowery" >&2
   exit 1
@@ -244,6 +248,7 @@ fi
   || { echo "$src/build/bowery doesn't run here (built for another platform?)" >&2; exit 1; }
 
 for pair in "${links[@]}"; do
+  [[ -e ${pair%%:*} ]] || continue  # a release from before the office host has none
   link "${pair%%:*}" "${pair#*:}"
 done
 command -v herdr >/dev/null || echo "note: herdr is not on your PATH; bowery drives it (https://herdr.dev)"

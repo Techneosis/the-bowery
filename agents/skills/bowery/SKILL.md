@@ -250,6 +250,23 @@ more to reload than it's worth).
 If a resume fails after the agent started ("is running again in ..."), the
 record already points at it: send the notice yourself, or `done` it.
 
+## Placing a job into an office
+
+Where offices are set up (an `office` host and a region file on the
+machine), work can go to an office instead of a pane: `bowery place --kind
+<kind> [--needs tools=git] [--pin <office>] -- "<prompt>"`, or `bowery
+dispatch <name> --job-kind <kind> [--office <office>] -- "<prompt>"`. The
+office's own rules decide when it takes the job, and its surface starts the
+agent. Read the exit, never re-implement a rule:
+
+- **0** placed: the JSON names the office and the job id.
+- **4** waiting: `queued.waiting_for` says which office and why. Tell the
+  person that, then leave it: `bowery place --retry` (run on a timer, or when
+  the office opens) sends it on. Don't dispatch it elsewhere by hand.
+- **3** refused by policy (a reserved effect): it needs a person.
+- **1** an error, or `unplaceable`: no office holds what it needs. That's a
+  setup gap to report, not something to retry.
+
 ## Remote dispatch (`--machine`, `--as`)
 
 For work on a shared box running its own herdr server, saved locally as a
