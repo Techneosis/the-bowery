@@ -821,16 +821,15 @@ func optStr(p, v string) string {
 	return p + v
 }
 
-// cmdOffice is `bowery office ls|describe|log`: the office host's own
-// answers, asked on this machine.
+// cmdOffice is `bowery office ls|describe|log|stop`: the office host's own
+// answers, asked on this machine. stop is the owner ending a running or
+// held job.
 func cmdOffice(argv []string) {
 	if len(argv) == 0 {
-		die("office: ls, describe <office>, log <office> [--since DUR]")
+		die("office: ls, describe <office>, log <office> [--since DUR], stop <office> <job>")
 	}
 	switch argv[0] {
-	case "ls", "describe", "log":
-	case "stop":
-		die("office stop ends held work, which comes with the run phase; nothing is held yet")
+	case "ls", "describe", "log", "stop":
 	default:
 		die("office: %s isn't ls, describe, log or stop", argv[0])
 	}

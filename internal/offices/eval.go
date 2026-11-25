@@ -66,15 +66,22 @@ type InstanceResult struct {
 	Failed        string   `json:"failed,omitempty"`
 	MS            int64    `json:"ms"`
 	Binding       bool     `json:"binding,omitempty"`
+	// StateMTime is a state-file rule's file mtime, logged where an exec
+	// rule logs its sha256.
+	StateMTime string `json:"state_mtime,omitempty"`
 }
 
 // Result is the combined answer for one job at one moment.
 type Result struct {
-	Verdict    string           `json:"verdict"`
-	Reason     string           `json:"reason,omitempty"`
-	RetryAfter string           `json:"retry_after,omitempty"`
-	By         string           `json:"by"` // rules, default, owner
-	Instances  []InstanceResult `json:"instances"`
+	Verdict    string `json:"verdict"`
+	Reason     string `json:"reason,omitempty"`
+	RetryAfter string `json:"retry_after,omitempty"`
+	By         string `json:"by"` // rules, default, owner
+	// OnClosed is what this closed result asks of a running job: the
+	// closing source's on_closed (spec §4.5).
+	OnClosed  string           `json:"on_closed,omitempty"`
+	Override  *State           `json:"override,omitempty"` // the owner's state, when it decided
+	Instances []InstanceResult `json:"instances"`
 }
 
 // Evaluator runs one office's rules. Now is read once per evaluation and
@@ -83,6 +90,9 @@ type Evaluator struct {
 	C         *Config
 	Component string // pull, daemon, wrapper, resolver-probe, run
 	Clock     func() time.Time
+	// Facts is the machine's fact readings; the pull loop keeps one across
+	// passes. Nil reads fresh.
+	Facts *Facts
 
 	mu    sync.Mutex
 	descs map[string]*Description
@@ -140,12 +150,27 @@ func (e *Evaluator) Evaluate(phase string, job *Job) (*Result, error) {
 			res.Instances = append(res.Instances, *r)
 		}
 	}
-	combine(res, e.C.Office.Rules.Default)
+	closer := combine(res, e.C.Office.Rules.Default)
 	st, err := ReadState(e.C.L, e.C.Office.Name)
 	if err != nil {
 		res.Verdict, res.Reason, res.RetryAfter, res.By = "closed", "the owner's state can't be read: "+err.Error(), "", "owner"
-	} else {
-		applyOverride(res, st, job, now)
+		closer = nil
+	} else if by := applyOverride(res, st, job, now); by != "" {
+		closer = nil
+		if by == "binding" {
+			for i := range res.Instances {
+				if r := res.Instances[i]; r.Binding && r.Verdict.Verdict == "closed" {
+					in := r.Instance
+					closer = &in
+					break
+				}
+			}
+		} else {
+			res.Override = st
+		}
+	}
+	if res.Verdict == "closed" {
+		res.OnClosed = e.C.OnClosedFor(closer)
 	}
 
 	jobID := ""
@@ -175,7 +200,8 @@ func contractOf(in Instance) int {
 	return in.Contract
 }
 
-func combine(res *Result, def string) {
+// combine returns the closing instance (the first closed one), if any.
+func combine(res *Result, def string) *Instance {
 	var closed []InstanceResult
 	anyOpen := false
 	for _, r := range res.Instances {
@@ -200,6 +226,8 @@ func combine(res *Result, def string) {
 			}
 		}
 		res.RetryAfter = latest
+		in := closed[0].Instance
+		return &in
 	case anyOpen:
 		res.Verdict, res.By = "open", "rules"
 	default:
@@ -208,6 +236,7 @@ func combine(res *Result, def string) {
 			res.Reason = "closed by default: no rule admits it"
 		}
 	}
+	return nil
 }
 
 // Earlier says whether RFC 3339 time a is before b, whatever offsets they
@@ -225,10 +254,11 @@ func later(a, b string) bool {
 }
 
 // applyOverride: close beats every rule; open beats every rule but a
-// binding one (spec §4.4).
-func applyOverride(res *Result, st *State, job *Job, now time.Time) {
+// binding one (spec §4.4). It says what decided: "owner", "binding" (an
+// open the binding rule kept closed), or "" (no override applies).
+func applyOverride(res *Result, st *State, job *Job, now time.Time) string {
 	if !st.Applies(job, now) {
-		return
+		return ""
 	}
 	if st.State == "closed" {
 		res.Verdict, res.By = "closed", "owner"
@@ -237,16 +267,17 @@ func applyOverride(res *Result, st *State, job *Job, now time.Time) {
 			res.Reason = "closed by its owner (" + st.By + ")"
 		}
 		res.RetryAfter = st.Until
-		return
+		return "owner"
 	}
 	for _, r := range res.Instances {
 		if r.Binding && r.Verdict.Verdict == "closed" {
 			res.Reason = r.Verdict.Reason + " (binding: the owner's open doesn't override it)"
 			res.By = "rules"
-			return
+			return "binding"
 		}
 	}
 	res.Verdict, res.Reason, res.RetryAfter, res.By = "open", "", "", "owner"
+	return "owner"
 }
 
 func (e *Evaluator) runInstance(in Instance, phase string, job *Job, now time.Time) *InstanceResult {
@@ -257,12 +288,15 @@ func (e *Evaluator) runInstance(in Instance, phase string, job *Job, now time.Ti
 	if !ok {
 		return failed(in, fmt.Sprintf("plugin %s isn't installed on this machine", in.Plugin))
 	}
-	if p.Kind != "exec" {
-		return failed(in, fmt.Sprintf("plugin kind %q isn't supported by this office host", p.Kind))
-	}
 	contract := contractOf(in)
 	if contract != Contract {
 		return failed(in, fmt.Sprintf("contract %d isn't one this core speaks", contract))
+	}
+	if p.Kind == "state-file" {
+		return e.runStateFile(in, p, phase, now)
+	}
+	if p.Kind != "exec" {
+		return failed(in, fmt.Sprintf("plugin kind %q isn't supported by this office host", p.Kind))
 	}
 	if !containsInt(p.Contracts, contract) {
 		return failed(in, fmt.Sprintf("plugin %s isn't installed for contract %d", in.Plugin, contract))
@@ -554,6 +588,19 @@ func (e *Evaluator) request(phase string, in Instance, cfg any, job *Job, d *Des
 	if history > 0 {
 		acc = acceptedOnMachine(e.C.L, now.Add(-history))
 	}
+	facts := e.Facts
+	if facts == nil {
+		facts = NewFacts()
+	}
+	officeRunning := []map[string]any{}
+	for _, r := range ReadRunning(e.C.L, o.Name) {
+		officeRunning = append(officeRunning, map[string]any{"id": r.ID, "kind": r.Kind, "priority": r.Priority,
+			"asked_by": r.AskedBy, "started": r.Started, "held": r.State != "running"})
+	}
+	machineRunning := []map[string]any{}
+	for _, r := range MachineRunning(e.C.L) {
+		machineRunning = append(machineRunning, map[string]any{"office": r.Office, "id": r.ID, "priority": r.Priority})
+	}
 	return map[string]any{
 		"contract":  Contract,
 		"phase":     phase,
@@ -562,10 +609,11 @@ func (e *Evaluator) request(phase string, in Instance, cfg any, job *Job, d *Des
 		"job":       jobV,
 		"office": map[string]any{
 			"name": o.Name, "region": o.Region, "machine": o.Machine, "owner": nonNil(o.Owner), "tier": o.Tier,
-			"kinds": nonNil(o.Kinds), "holdings": o.Holdings, "state": stateV, "running": []any{},
+			"kinds": nonNil(o.Kinds), "holdings": o.Holdings, "state": stateV, "running": officeRunning,
 		},
 		"machine": map[string]any{
-			"name": e.C.Machine.Machine, "running": []any{}, "accepted": acc, "facts": map[string]any{},
+			"name": e.C.Machine.Machine, "running": machineRunning, "accepted": acc,
+			"facts": facts.For(e, d.Facts, now),
 		},
 		"clock": map[string]any{"now": now.Format(time.RFC3339), "timezone": e.C.Region.Timezone},
 	}
@@ -618,27 +666,73 @@ func acceptedOnMachine(l Layout, since time.Time) []accepted {
 func (e *Evaluator) log(phase, job string, res *Result, now time.Time) error {
 	o := e.C.Office.Name
 	t := Stamp(now)
+	// At the run phase the same verdicts come every interval; repeats of an
+	// identical one for one job and instance collapse (spec §9).
+	var st *streaks
+	if phase == "run" {
+		st = loadStreaks(e.C.L, o)
+	}
+	emit := func(key, sig string, line Entry, extra ...Entry) error {
+		if st != nil {
+			flush, write := st.see(key, sig, line, t)
+			if flush != nil {
+				if err := Append(e.C.L, o, flush); err != nil {
+					return err
+				}
+			}
+			if !write {
+				return nil
+			}
+		}
+		if err := Append(e.C.L, o, line); err != nil {
+			return err
+		}
+		for _, x := range extra {
+			if err := Append(e.C.L, o, x); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	for _, r := range res.Instances {
 		line := Entry{"time": t, "event": "verdict", "phase": phase, "component": e.Component, "job": job,
 			"instance": r.Name, "source": r.Source, "plugin": r.Plugin, "plugin_version": r.PluginVersion,
 			"sha256": r.SHA256, "contract": r.Contract, "verdict": r.Verdict.Verdict, "reason": r.Verdict.Reason,
 			"retry_after": r.Verdict.RetryAfter, "note": r.Verdict.Note, "ms": r.MS, "result": res.Verdict}
+		if r.StateMTime != "" {
+			line["state_mtime"] = r.StateMTime
+		}
 		if r.Verdict.Alert != nil {
 			line["alert"] = r.Verdict.Alert
 		}
-		if err := Append(e.C.L, o, line); err != nil {
+		var extra []Entry
+		if r.Failed != "" {
+			extra = append(extra, Entry{"time": t, "event": "rule-failed", "phase": phase, "component": e.Component,
+				"job": job, "instance": r.Name, "plugin": r.Plugin, "what": r.Failed, "alert": Alert{"smoke", r.Verdict.Reason}})
+		}
+		sig := strings.Join([]string{r.Verdict.Verdict, r.Verdict.Reason, r.Verdict.RetryAfter, r.Failed, r.SHA256,
+			res.Verdict}, "\x00")
+		if err := emit(job+"/"+r.Name, sig, line, extra...); err != nil {
 			return err
 		}
-		if r.Failed != "" {
-			if err := Append(e.C.L, o, Entry{"time": t, "event": "rule-failed", "phase": phase, "component": e.Component,
-				"job": job, "instance": r.Name, "plugin": r.Plugin, "what": r.Failed, "alert": Alert{"smoke", r.Verdict.Reason}}); err != nil {
-				return err
-			}
-		}
 	}
-	return Append(e.C.L, o, Entry{"time": t, "event": "evaluated", "phase": phase, "component": e.Component,
+	line := Entry{"time": t, "event": "evaluated", "phase": phase, "component": e.Component,
 		"job": job, "result": res.Verdict, "reason": res.Reason, "retry_after": res.RetryAfter, "by": res.By,
-		"instances": len(res.Instances)})
+		"instances": len(res.Instances)}
+	if res.OnClosed != "" {
+		line["on_closed"] = res.OnClosed
+	}
+	if res.Override != nil {
+		line["override"] = res.Override
+	}
+	sig := strings.Join([]string{res.Verdict, res.Reason, res.RetryAfter, res.By, res.OnClosed}, "\x00")
+	if err := emit(job+"/", sig, line); err != nil {
+		return err
+	}
+	if st != nil {
+		return st.save()
+	}
+	return nil
 }
 
 // cache keeps the office-wide verdicts a place evaluation produced, for

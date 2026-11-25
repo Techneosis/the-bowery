@@ -31,11 +31,17 @@ const usage = `office: the office host. Opens and closes offices, judges placeme
   office describe <office> [--json]        what it holds, its state, its published verdicts
   office describe <office> --probe         judge the job on stdin (JSON) at the place phase
   office open <office> [--until T] [--kinds K,..] [--scope S]
-  office close <office> [--until T] [--kinds K,..] [--scope S]
+  office close <office> [--until T] [--kinds K,..] [--scope S] [--now]
+                                           --now also interrupts running work at once (kept, held)
   office clear <office>                    drop the owner's override: the rules decide
-  office pull <office> [--json]            one pass over the inbox: accept, refuse or keep waiting
+  office stop <office> <job>               the owner ends a running or held job (the pull job does it)
+  office done <office> <job>               a job reports it has ended (from inside the office)
+  office yielded <office> <job>            a held job reports it reached its safe point
+  office pull <office> [--json]            one pass: running work (run phase), then the inbox
   office pull <office> --loop [--interval 1s] [--backstop 30s] [--for DUR]
-                                           the pull job: wait on the inbox, pass, repeat
+                                           the pull job: long-polls the inbox, looks for events
+                                           every --interval, runs a pass on either, at a retry
+                                           or the run phase's interval, or at the backstop
   office log <office> [--since DUR] [--json]
   office check <office>                    the install checks: plugins, contracts, phases, schemas, tier
   office version
@@ -93,6 +99,8 @@ func main() {
 		cmdDescribe(rest)
 	case "open", "close", "clear":
 		cmdFlip(cmd, rest)
+	case "stop", "done", "yielded":
+		cmdJob(cmd, rest)
 	case "pull":
 		cmdPull(rest)
 	case "log":
@@ -193,10 +201,12 @@ func catalog(c *offices.Config) *offices.Catalog {
 		die("%v", err)
 	}
 	cat.State = st
-	cat.Verdicts = offices.ReadPublished(layout, c.Office.Name, now())
+	cat.Verdicts = offices.LivePublished(c, now())
 	if l, err := transport(c, 0).Inbox(c.Box()).List(); err == nil {
 		cat.Pending = len(l)
 	}
+	cat.Jobs = offices.ReadRunning(layout, c.Office.Name)
+	cat.Running = len(cat.Jobs)
 	return cat
 }
 
@@ -227,8 +237,8 @@ func cmdLs(args []string) {
 		return
 	}
 	for _, c := range cats {
-		fmt.Printf("%-28s %-8s %s  kinds=%s tools=%s pending=%d%s\n", c.Office, stateWord(c), c.Region,
-			strings.Join(c.Kinds, ","), strings.Join(c.Holdings.Tools, ","), c.Pending, verdictWords(c.Verdicts))
+		fmt.Printf("%-28s %-8s %s  kinds=%s tools=%s pending=%d running=%d%s\n", c.Office, stateWord(c), c.Region,
+			strings.Join(c.Kinds, ","), strings.Join(c.Holdings.Tools, ","), c.Pending, c.Running, verdictWords(c.Verdicts))
 	}
 }
 
@@ -290,6 +300,10 @@ func cmdDescribe(args []string) {
 	for _, v := range cat.Verdicts {
 		fmt.Printf("verdict  %s %s%s until %s\n", v.Instance, v.Verdict, opt(": ", v.Reason), v.ValidUntil)
 	}
+	for _, r := range cat.Jobs {
+		fmt.Printf("job      %s %s since %s%s%s\n", r.ID, r.State, r.Started, opt(" (", r.OnClosed+opt(": ", r.Reason)+")"),
+			opt(", yielded ", r.Yielded))
+	}
 	fmt.Printf("inbox    %s (%d waiting)\n", cat.Box, cat.Pending)
 }
 
@@ -334,8 +348,8 @@ func cmdFlip(cmd string, args []string) {
 	}
 	f := parse(args, valued, []string{"--now"})
 	need(f, cmd)
-	if f.bools["--now"] {
-		die("close --now stops running agents, which comes with the run phase; this office host doesn't track running agents yet")
+	if f.bools["--now"] && cmd != "close" {
+		die("--now is close's")
 	}
 	c := load(f.office)
 	me := offices.Whoami()
@@ -344,6 +358,13 @@ func cmdFlip(cmd string, args []string) {
 	}
 	t := now().UTC()
 	entry := offices.Entry{"event": "state", "by": me}
+	// The flip records what it replaced, so the log alone says who
+	// overrode whom.
+	if was, err := offices.ReadState(layout, c.Office.Name); err == nil && was != nil {
+		entry["was"] = was
+	} else if err == nil {
+		entry["was"] = "rules"
+	}
 	if cmd == "clear" {
 		if err := offices.WriteState(layout, c.Office.Name, nil); err != nil {
 			die("%v", err)
@@ -364,15 +385,75 @@ func cmdFlip(cmd string, args []string) {
 			st.Kinds = strings.Split(k, ",")
 		}
 		st.Scope = f.vals["--scope"]
+		st.Now = f.bools["--now"]
 		if err := offices.WriteState(layout, c.Office.Name, st); err != nil {
 			die("%v", err)
 		}
 		entry["state"], entry["until"], entry["kinds"], entry["scope"] = st.State, st.Until, st.Kinds, st.Scope
+		if st.Now {
+			entry["now"] = true
+		}
 	}
 	if err := offices.Append(layout, c.Office.Name, entry); err != nil {
 		die("the state changed but the log can't be written: %v", err)
 	}
 	fmt.Printf("%s: %s\n", c.Office.Name, map[string]string{"open": "open", "close": "closed", "clear": "back to its rules"}[cmd])
+}
+
+// ---------------------------------------------------------------- running jobs
+
+// cmdJob: the owner's stop (left as a request: the pull job, as the office,
+// is what talks to the office's agents), and a job's own reports from
+// inside the office, done and yielded.
+func cmdJob(cmd string, args []string) {
+	if len(args) != 2 || strings.HasPrefix(args[0], "-") || strings.HasPrefix(args[1], "-") {
+		die("%s <office> <job>", cmd)
+	}
+	f, id := parse(args[:1], nil, nil), args[1]
+	c := load(f.office)
+	r, err := offices.GetRunning(layout, c.Office.Name, id)
+	if err != nil {
+		die("%v", err)
+	}
+	me := offices.Whoami()
+	switch cmd {
+	case "stop":
+		if !layout.Dev && !contains(c.Office.Owner, me) {
+			die("%s isn't an owner of %s (owners: %s)", me, c.Office.Name, strings.Join(c.Office.Owner, ", "))
+		}
+		if err := offices.PutRequest(layout, c.Office.Name, offices.Request{Action: "stop", Job: id, By: me,
+			At: offices.Stamp(now())}); err != nil {
+			die("%v", err)
+		}
+		if err := offices.Append(layout, c.Office.Name, offices.Entry{"event": "stop-asked", "job": id, "by": me, "was": r.State}); err != nil {
+			die("the stop is asked but the log can't be written: %v", err)
+		}
+		fmt.Printf("%s: asked to stop %s (%s); its pull job ends it on its next pass\n", c.Office.Name, id, r.State)
+	case "done", "yielded":
+		checkRunsAsOffice(c)
+		if cmd == "done" {
+			if err := offices.EndRunning(layout, c.Office.Name, id); err != nil {
+				die("%v", err)
+			}
+			if err := offices.Append(layout, c.Office.Name, offices.Entry{"event": "done", "job": id, "was": r.State}); err != nil {
+				die("%v", err)
+			}
+			fmt.Printf("%s: %s done\n", c.Office.Name, id)
+			return
+		}
+		if r.State != "held" {
+			die("%s isn't held (it is %s)", id, r.State)
+		}
+		r.Yielded = offices.Stamp(now())
+		if err := offices.PutRunning(layout, r); err != nil {
+			die("%v", err)
+		}
+		if err := offices.Append(layout, c.Office.Name, offices.Entry{"event": "yielded", "job": id, "on_closed": r.OnClosed,
+			"held_at": r.HeldAt}); err != nil {
+			die("%v", err)
+		}
+		fmt.Printf("%s: %s yielded; held until the office opens\n", c.Office.Name, id)
+	}
 }
 
 // ---------------------------------------------------------------- pull
@@ -416,6 +497,9 @@ func cmdPull(args []string) {
 			printJSON(rep)
 			return
 		}
+		for _, r := range rep.Run {
+			fmt.Printf("%-8s %s%s%s\n", r.Action, r.ID, opt(" (", r.OnClosed+")"), opt(": ", r.Reason))
+		}
 		for _, a := range rep.Accepted {
 			if a.Exit != nil {
 				fmt.Printf("accepted %s, started through %s (exit %d)\n", a.ID, a.Surface, *a.Exit)
@@ -448,41 +532,51 @@ func cmdPull(args []string) {
 		ctx, cancel = context.WithTimeout(ctx, dur("--for", 0))
 		defer cancel()
 	}
+	facts := offices.NewFacts() // provider readings live as long as the loop
 	for {
 		c = load(f.office) // a re-installed record or machine file takes effect on the next pass
-		rep, err := offices.Pull(c, evaluator(c, "pull"), t, in, false)
+		ev := evaluator(c, "pull")
+		ev.Facts = facts
+		rep, err := offices.Pull(c, ev, t, in, false)
 		if err != nil {
 			die("%v", err)
 		}
-		if len(rep.Accepted)+len(rep.Refused)+len(rep.Dropped) > 0 {
+		if len(rep.Run)+len(rep.Accepted)+len(rep.Refused)+len(rep.Dropped) > 0 {
 			report(rep)
 		}
-		wait := backstop
-		if rep.NextRetry != "" {
-			if ra, err := time.Parse(time.RFC3339Nano, rep.NextRetry); err == nil {
-				if d := time.Until(ra); d < wait {
-					wait = max(d, 0)
-				}
-			}
+		// The long-poll: block on the inbox until mail lands, and meanwhile
+		// look for an event (the owner's state, a config file, a gate file,
+		// running work) every --interval. Wake for whichever comes first,
+		// or a retry, an until or the run phase falling due, never past the
+		// backstop.
+		deadline := time.Now().Add(backstop)
+		if due := offices.NextDue(c, rep, time.Now()); !due.IsZero() && due.Before(deadline) {
+			deadline = due
 		}
-		// Wait for mail, an event (the owner's state, a config file) or the
-		// next retry, whichever is first, never past the backstop. A
-		// long-polling transport blocks inside Wait; the directory one
-		// looks every --interval.
-		events, deadline := c.Events(), time.Now().Add(wait)
+		events := c.Events()
+		wctx, cancel := context.WithDeadline(ctx, deadline)
+		mail := make(chan struct{})
+		go func() {
+			defer close(mail)
+			_, _ = in.Wait(wctx, time.Until(deadline))
+		}()
+		tick := time.NewTicker(interval)
+	wait:
 		for {
-			step := min(interval, time.Until(deadline))
-			if step <= 0 {
-				break
-			}
-			changed, err := in.Wait(ctx, step)
-			if err != nil {
-				return
-			}
-			if changed || c.Events() != events {
-				break
+			select {
+			case <-mail:
+				break wait
+			case <-tick.C:
+				if c.Events() != events {
+					break wait
+				}
+			case <-wctx.Done():
+				break wait
 			}
 		}
+		tick.Stop()
+		cancel()
+		<-mail
 		if ctx.Err() != nil {
 			return
 		}
@@ -569,8 +663,19 @@ func cmdCheck(args []string) {
 		if !offices.NameRE.MatchString(in.Name) {
 			probs = append(probs, fmt.Sprintf("instance %q: not a valid name", in.Name))
 		}
-		if in.OnClosed != "" && !contains([]string{"yield", "finish-turn", "stop-next-turn"}, in.OnClosed) {
+		if in.OnClosed != "" && !contains(offices.OnClosedModes, in.OnClosed) {
 			probs = append(probs, fmt.Sprintf("instance %s: on_closed %q", in.Name, in.OnClosed))
+		}
+		if p, ok := c.Machine.Plugins[in.Plugin]; ok && p.Kind == "state-file" {
+			if len(in.Config) > 0 {
+				probs = append(probs, fmt.Sprintf("instance %s: a state-file rule takes no config", in.Name))
+			}
+			for _, ph := range in.At {
+				if !contains(offices.Phases, ph) {
+					probs = append(probs, fmt.Sprintf("instance %s: there is no phase %s", in.Name, ph))
+				}
+			}
+			continue
 		}
 		d, err := ev.Describe(in.Plugin)
 		if err != nil {
@@ -587,6 +692,11 @@ func cmdCheck(args []string) {
 		for _, ph := range in.At {
 			if !contains(d.Phases, ph) {
 				probs = append(probs, fmt.Sprintf("instance %s: plugin %s doesn't run at %s", in.Name, in.Plugin, ph))
+			}
+		}
+		for _, fact := range d.Facts {
+			if offices.FactSource(c.Machine, fact) == "" {
+				probs = append(probs, fmt.Sprintf("instance %s: plugin %s reads fact %s, which nothing on this machine supplies", in.Name, in.Plugin, fact))
 			}
 		}
 		if len(d.ConfigSchema) > 0 {

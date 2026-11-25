@@ -1,12 +1,9 @@
 package offices
 
 import (
-	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -25,6 +22,7 @@ type PullItem struct {
 
 type PullReport struct {
 	Office    string     `json:"office"`
+	Run       []RunItem  `json:"run"`
 	Accepted  []PullItem `json:"accepted"`
 	Waiting   []PullItem `json:"waiting"`
 	Refused   []PullItem `json:"refused"`
@@ -55,17 +53,57 @@ func (c *Config) readPending() map[string]pending {
 }
 
 // events is a fingerprint of what can change a waiting job's verdict
-// without a retry time: the owner's state, and the config files.
+// without a retry time: the owner's state, the config files, the machine's
+// state-file gates, and the office's running work and the owner's requests.
 func (c *Config) Events() string {
 	var parts []string
-	for _, p := range []string{c.L.StateFile(c.Office.Name), c.L.RegionFile(), c.L.MachineFile(), c.L.OfficeFile(c.Office.Name)} {
+	files := []string{c.L.StateFile(c.Office.Name), c.L.RegionFile(), c.L.MachineFile(), c.L.OfficeFile(c.Office.Name)}
+	names := make([]string, 0, len(c.Machine.Plugins))
+	for n, p := range c.Machine.Plugins {
+		if p.Kind == "state-file" {
+			names = append(names, n)
+		}
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		files = append(files, c.Machine.Plugins[n].Path)
+	}
+	for _, p := range files {
 		if fi, err := os.Stat(p); err == nil {
 			parts = append(parts, fmt.Sprint(fi.ModTime().UnixNano()))
 		} else {
 			parts = append(parts, "-")
 		}
 	}
+	parts = append(parts, runningEvents(c.L, c.Office.Name))
 	return strings.Join(parts, ",")
+}
+
+// stateExpiry logs, once, that an owner's override with an until has run
+// out (spec §11 phase 4: close --until expires on time), and returns the
+// until if it is still ahead, so the loop can wake for it.
+func (c *Config) stateExpiry(now time.Time) (string, error) {
+	st, err := ReadState(c.L, c.Office.Name)
+	if err != nil || st == nil || st.Until == "" {
+		return "", nil
+	}
+	u, err := time.Parse(time.RFC3339, st.Until)
+	if err != nil {
+		return "", nil
+	}
+	if now.Before(u) {
+		return st.Until, nil
+	}
+	mark := filepath.Join(c.L.VarDir(c.Office.Name), "state-expired")
+	key := st.State + " " + st.At + " " + st.Until
+	if b, _ := os.ReadFile(mark); string(b) == key {
+		return "", nil
+	}
+	if err := Append(c.L, c.Office.Name, Entry{"event": "state-expired", "state": st.State, "by": st.By, "at": st.At,
+		"until": st.Until}); err != nil {
+		return "", err
+	}
+	return "", WriteAtomic(mark, []byte(key), 0o644)
 }
 
 // Lock holds the office's pull lock (one pull at a time) until the returned
@@ -97,11 +135,22 @@ func Pull(c *Config, ev *Evaluator, t Transport, in Inbox, force bool) (*PullRep
 		return nil, err
 	}
 	defer unlock()
+	if _, err := c.stateExpiry(ev.Clock()); err != nil {
+		return nil, err
+	}
+	// Running work first: hold what a closing source asks to hold, resume
+	// what may resume, end what the owner stopped. Then new work.
+	rev := NewEvaluator(c, "run")
+	rev.Clock, rev.Facts = ev.Clock, ev.Facts
+	run, err := RunPhase(c, rev, ev)
+	if err != nil {
+		return nil, err
+	}
 	letters, err := in.List()
 	if err != nil {
 		return nil, err
 	}
-	rep := &PullReport{Office: c.Office.Name, Accepted: []PullItem{}, Waiting: []PullItem{}, Refused: []PullItem{}, Dropped: []PullItem{}}
+	rep := &PullReport{Office: c.Office.Name, Run: run, Accepted: []PullItem{}, Waiting: []PullItem{}, Refused: []PullItem{}, Dropped: []PullItem{}}
 	pend := c.readPending()
 	o := c.Office.Name
 	type item struct {
@@ -209,6 +258,19 @@ func Pull(c *Config, ev *Evaluator, t Transport, in Inbox, force bool) (*PullRep
 				continue
 			}
 		}
+		// While the office holds running work, new work pauses (spec §4.5).
+		if held := HeldReason(c.L, o); held != "" {
+			if p.Reason != held {
+				if err := Append(c.L, o, Entry{"event": "place-waiting", "job": j.ID, "kind": j.Kind, "scope": j.Scope,
+					"asked_by": j.AskedBy, "region": j.Region, "reason": held}); err != nil {
+					return nil, err
+				}
+			}
+			p.Reason, p.RetryAfter, p.LastEval, p.Events = held, "", "", ""
+			pend[j.ID] = p
+			rep.Waiting = append(rep.Waiting, PullItem{ID: j.ID, Reason: held})
+			continue
+		}
 		// A waiting placement is judged again only on an event or its time.
 		if !force && p.LastEval != "" {
 			due := false
@@ -267,6 +329,15 @@ func Pull(c *Config, ev *Evaluator, t Transport, in Inbox, force bool) (*PullRep
 			if err := Append(c.L, o, Entry{"event": "launched", "job": j.ID, "surface": surface, "exit": code,
 				"stages": stages(j, p.DeliveredAt, acceptedAt, startedAt)}); err != nil {
 				return nil, err
+			}
+			// A surface that started its agent (exit 0) leaves a running job,
+			// until the job reports done or the owner stops it.
+			if code == 0 {
+				r := &Running{ID: j.ID, Office: o, Kind: j.Kind, Priority: j.Priority, AskedBy: j.AskedBy, Scope: j.Scope,
+					Surface: surface, Started: startedAt, State: "running"}
+				if err := PutRunning(c.L, r); err != nil {
+					return nil, err
+				}
 			}
 		}
 		rep.Accepted = append(rep.Accepted, item)
@@ -328,22 +399,31 @@ func launch(c *Config, j *Job) (int, error) {
 		return 0, fmt.Errorf("surface %q has no command on this machine", surface)
 	}
 	b, _ := json.Marshal(j)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, s.Command[0], s.Command[1:]...)
-	cmd.Stdin = bytes.NewReader(b)
-	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"),
-		"OFFICE_NAME=" + c.Office.Name, "OFFICE_JOB_ID=" + j.ID, "OFFICE_SURFACE=" + surface}
-	if c.L.Dev {
-		cmd.Env = append(cmd.Env, "OFFICE_ROOT="+filepath.Dir(c.L.Etc))
+	return runSurface(c, s.Command, b, j.ID, surface, nil)
+}
+
+// NextDue is when the pull loop must look again even with no mail or
+// event: the earliest of a waiting placement's retry, an owner's until, and
+// (with running work) the run-phase interval. Zero means only the backstop.
+func NextDue(c *Config, rep *PullReport, now time.Time) time.Time {
+	var due time.Time
+	consider := func(t time.Time) {
+		if !t.IsZero() && (due.IsZero() || t.Before(due)) {
+			due = t
+		}
 	}
-	cmd.Dir = "/"
-	err := cmd.Run()
-	if ee, ok := err.(*exec.ExitError); ok {
-		return ee.ExitCode(), nil
+	if rep.NextRetry != "" {
+		if t, err := time.Parse(time.RFC3339Nano, rep.NextRetry); err == nil {
+			consider(t)
+		}
 	}
-	if err != nil {
-		return 0, err
+	if u, _ := c.stateExpiry(now); u != "" {
+		if t, err := time.Parse(time.RFC3339, u); err == nil {
+			consider(t)
+		}
 	}
-	return 0, nil
+	if len(ReadRunning(c.L, c.Office.Name)) > 0 {
+		consider(now.Add(c.RunInterval()))
+	}
+	return due
 }

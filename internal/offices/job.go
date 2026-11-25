@@ -251,6 +251,7 @@ type Catalog struct {
 	State    *State        `json:"state"`
 	Verdicts []Published   `json:"verdicts"`
 	Running  int           `json:"running"`
+	Jobs     []Running     `json:"jobs"`
 	Pending  int           `json:"pending"`
 	Mode     string        `json:"mode"`
 }

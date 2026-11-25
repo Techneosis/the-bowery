@@ -112,11 +112,16 @@ type Plugin struct {
 	Path      string `toml:"path"`
 	SHA256    string `toml:"sha256"`
 	Contracts []int  `toml:"contracts"`
-	// state-file plugins (read, not yet evaluated: that kind is M2's)
+	// state-file plugins (spec §5.2): a JSON object at Path, written by a
+	// service outside the office host. AtField is optional: the field that
+	// holds the file's own timestamp (RFC 3339, or Unix seconds), so a
+	// writer whose clock stopped is caught even if something touches the
+	// file.
 	MaxAge          string            `toml:"max_age"`
 	OpenField       string            `toml:"open_field"`
 	ReasonField     string            `toml:"reason_field"`
 	RetryAfterField string            `toml:"retry_after_field"`
+	AtField         string            `toml:"at_field"`
 	Facts           map[string]string `toml:"facts"`
 }
 
@@ -130,9 +135,22 @@ type FactProvider struct {
 // Surface is how an accepted job is started in an office. The real surfaces
 // are the transport spec's; until they land, a surface here is a command the
 // pull job runs (as the office) with the job as JSON on stdin.
+//
+// Hold, Resume and Stop are how the office host asks a running job to do
+// what a closing source's on_closed says (spec §4.5), to carry on, and to
+// end. Each gets the job as JSON on stdin and OFFICE_ON_CLOSED (yield,
+// finish-turn, stop-next-turn, or now for the owner's close --now) and
+// OFFICE_REASON in its environment. A surface without them still has its
+// jobs marked held; the office host just can't tell the agent.
 type Surface struct {
 	Command []string `toml:"command"`
+	Hold    []string `toml:"hold"`
+	Resume  []string `toml:"resume"`
+	Stop    []string `toml:"stop"`
 }
+
+// OnClosedModes are what a closing source may ask of running work.
+var OnClosedModes = []string{"yield", "finish-turn", "stop-next-turn"}
 
 type Machine struct {
 	Machine string `toml:"machine"`
@@ -286,8 +304,14 @@ func LoadRegion(l Layout) (*Region, error) {
 			}
 		}
 	}
+	if err := checkOnClosed(l.RegionFile(), "defaults.on_closed", r.Defaults.OnClosed); err != nil {
+		return nil, err
+	}
 	for i := range r.Defaults.Rules {
 		r.Defaults.Rules[i].source = "region"
+		if err := checkOnClosed(l.RegionFile(), "rule "+r.Defaults.Rules[i].Name, r.Defaults.Rules[i].OnClosed); err != nil {
+			return nil, err
+		}
 	}
 	return r, nil
 }
@@ -303,6 +327,54 @@ func LoadMachine(l Layout) (*Machine, error) {
 	}
 	for i := range m.Rules {
 		m.Rules[i].source = "machine"
+		if err := checkOnClosed(l.MachineFile(), "rule "+m.Rules[i].Name, m.Rules[i].OnClosed); err != nil {
+			return nil, err
+		}
+	}
+	// One name, one source: a fact two providers claim would be whichever
+	// ran last.
+	from := map[string]string{}
+	claim := func(fact, by string) error {
+		if prev, ok := from[fact]; ok && prev != by {
+			return fmt.Errorf("%s: fact %s is supplied by both %s and %s", l.MachineFile(), fact, prev, by)
+		}
+		from[fact] = by
+		return nil
+	}
+	for name, fp := range m.Facts {
+		if fp.Path == "" || fp.SHA256 == "" || len(fp.Facts) == 0 {
+			return nil, fmt.Errorf("%s: facts.%s needs path, sha256 and facts", l.MachineFile(), name)
+		}
+		if _, err := time.ParseDuration(fp.Interval); err != nil {
+			return nil, fmt.Errorf("%s: facts.%s: interval: %v", l.MachineFile(), name, err)
+		}
+		for _, f := range fp.Facts {
+			if err := claim(f, "fact provider "+name); err != nil {
+				return nil, err
+			}
+		}
+	}
+	for name, p := range m.Plugins {
+		switch p.Kind {
+		case "exec", "module":
+		case "state-file":
+			if p.Path == "" || p.OpenField == "" {
+				return nil, fmt.Errorf("%s: plugins.%s: a state-file plugin needs path and open_field", l.MachineFile(), name)
+			}
+			if p.MaxAge == "" {
+				return nil, fmt.Errorf("%s: plugins.%s: max_age is required for a state-file plugin", l.MachineFile(), name)
+			}
+			if d, err := time.ParseDuration(p.MaxAge); err != nil || d <= 0 {
+				return nil, fmt.Errorf("%s: plugins.%s: max_age %q isn't a duration", l.MachineFile(), name, p.MaxAge)
+			}
+			for f := range p.Facts {
+				if err := claim(f, "state file "+name); err != nil {
+					return nil, err
+				}
+			}
+		default:
+			return nil, fmt.Errorf("%s: plugins.%s: kind %q isn't exec, module or state-file", l.MachineFile(), name, p.Kind)
+		}
 	}
 	return m, nil
 }
@@ -335,8 +407,19 @@ func LoadOffice(l Layout, name string) (*Office, error) {
 	default:
 		return nil, fmt.Errorf("%s: rules.default must be open or closed", l.OfficeFile(name))
 	}
+	if err := checkOnClosed(l.OfficeFile(name), "rules.on_closed", o.Rules.OnClosed); err != nil {
+		return nil, err
+	}
+	if o.Rules.Interval != "" {
+		if d, err := time.ParseDuration(o.Rules.Interval); err != nil || d <= 0 {
+			return nil, fmt.Errorf("%s: rules.interval %q isn't a duration", l.OfficeFile(name), o.Rules.Interval)
+		}
+	}
 	for i := range o.Rules.Use {
 		o.Rules.Use[i].source = "office"
+		if err := checkOnClosed(l.OfficeFile(name), "rule "+o.Rules.Use[i].Name, o.Rules.Use[i].OnClosed); err != nil {
+			return nil, err
+		}
 	}
 	dir := l.OfficeDir(name)
 	var err error
@@ -455,6 +538,38 @@ func readRepos(path string) ([]RepoHolding, error) {
 		out = append(out, h)
 	}
 	return out, nil
+}
+
+func checkOnClosed(file, where, v string) error {
+	if v == "" || contains(OnClosedModes, v) {
+		return nil
+	}
+	return fmt.Errorf("%s: %s: on_closed %q isn't yield, finish-turn or stop-next-turn", file, where, v)
+}
+
+// OnClosedFor is what a closing source asks of running work: the
+// instance's own on_closed, else the office's, else the region's, else
+// yield (spec §4.5). in is nil for the owner's close or the default.
+func (c *Config) OnClosedFor(in *Instance) string {
+	if in != nil && in.OnClosed != "" {
+		return in.OnClosed
+	}
+	if c.Office.Rules.OnClosed != "" {
+		return c.Office.Rules.OnClosed
+	}
+	if c.Region.Defaults.OnClosed != "" {
+		return c.Region.Defaults.OnClosed
+	}
+	return "yield"
+}
+
+// RunInterval is how often run-phase rules run for running work: the
+// office's rules.interval, else the region's, else 10s.
+func (c *Config) RunInterval() time.Duration {
+	if c.Office.Rules.Interval != "" {
+		return Duration(c.Office.Rules.Interval, 10*time.Second)
+	}
+	return Duration(c.Region.Defaults.Interval, 10*time.Second)
 }
 
 // Duration parses a config duration, with a default for "".

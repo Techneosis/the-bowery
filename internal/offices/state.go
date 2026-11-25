@@ -15,8 +15,11 @@ type State struct {
 	Until string   `json:"until,omitempty"`
 	Kinds []string `json:"kinds,omitempty"`
 	Scope string   `json:"scope,omitempty"`
-	By    string   `json:"by"`
-	At    string   `json:"at"`
+	// Now is the owner's close --now: running work is interrupted at once
+	// (keeping its claimed work), not asked per on_closed.
+	Now bool   `json:"now,omitempty"`
+	By  string `json:"by"`
+	At  string `json:"at"`
 }
 
 // ReadState returns nil when there is no override.

@@ -38,7 +38,8 @@ type Transport interface {
 // may be something new, or when the backstop passes, whichever is first, so
 // a transport that can long-poll (a mailbox's "wait") implements Wait by
 // blocking on it, and the loop needs no change. The directory transport
-// polls on an interval.
+// blocks on a watch of the box where the platform has one (Linux), and
+// polls on an interval elsewhere.
 type Inbox interface {
 	Wait(ctx context.Context, backstop time.Duration) (bool, error) // true: the box changed
 	List() ([]Letter, error)
@@ -115,12 +116,17 @@ func (d *DirInbox) snapshot() string {
 	return strings.Join(names, "\n")
 }
 
+// Wait is a long-poll: it returns as soon as the box's placements change,
+// or false at the backstop. On Linux it blocks on an inotify watch of the
+// box, so a letter is seen the moment it lands; elsewhere it looks every
+// Poll.
 func (d *DirInbox) Wait(ctx context.Context, backstop time.Duration) (bool, error) {
 	poll := d.Poll
 	if poll <= 0 {
 		poll = time.Second
 	}
 	deadline := time.Now().Add(backstop)
+	_ = os.MkdirAll(d.Dir, 0o755)
 	for {
 		if s := d.snapshot(); s != d.last {
 			d.last = s
@@ -128,6 +134,23 @@ func (d *DirInbox) Wait(ctx context.Context, backstop time.Duration) (bool, erro
 		}
 		if !time.Now().Before(deadline) {
 			return false, nil
+		}
+		if w, err := newDirWatch(d.Dir); err == nil {
+			// A letter that landed before the watch was in place.
+			if s := d.snapshot(); s != d.last {
+				w.close()
+				d.last = s
+				return true, nil
+			}
+			_, werr := w.wait(ctx, deadline)
+			w.close()
+			if ctx.Err() != nil {
+				return false, ctx.Err()
+			}
+			if werr == nil {
+				continue // look again: an event, or the deadline
+			}
+			// The watch broke: fall back to polling for this wait.
 		}
 		wait := poll
 		if r := time.Until(deadline); r < wait {
