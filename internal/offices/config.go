@@ -6,7 +6,6 @@ import (
 	"os"
 	"regexp"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -147,6 +146,9 @@ type Surface struct {
 	Hold    []string `toml:"hold"`
 	Resume  []string `toml:"resume"`
 	Stop    []string `toml:"stop"`
+	// Timeout is how long any of its commands may take (default 1m); then
+	// its process group is killed.
+	Timeout string `toml:"timeout"`
 }
 
 // OnClosedModes are what a closing source may ask of running work.
@@ -155,11 +157,13 @@ var OnClosedModes = []string{"yield", "finish-turn", "stop-next-turn"}
 type Machine struct {
 	Machine string `toml:"machine"`
 	// Transport is the placement transport's name (default "dir").
-	Transport string                  `toml:"transport"`
-	Plugins   map[string]Plugin       `toml:"plugins"`
-	Facts     map[string]FactProvider `toml:"facts"`
-	Rules     []Instance              `toml:"rules"`
-	Surfaces  map[string]Surface      `toml:"surfaces"`
+	Transport string `toml:"transport"`
+	// Recorder is the user that writes the decisions logs in root mode.
+	Recorder string                  `toml:"recorder"`
+	Plugins  map[string]Plugin       `toml:"plugins"`
+	Facts    map[string]FactProvider `toml:"facts"`
+	Rules    []Instance              `toml:"rules"`
+	Surfaces map[string]Surface      `toml:"surfaces"`
 }
 
 // ---------------------------------------------------------------- office
@@ -253,26 +257,17 @@ func decodeStrict(path string, v any) error {
 var rootMode = true
 
 // checkRootOwned: in root mode every config file and plugin is root's and
-// writable by nobody else. Dev mode skips it (and says so).
+// writable by nobody else, and so is every directory above it, up to /.
+// Dev mode skips it (and says so).
 func checkRootOwned(path string) error {
 	if !rootMode {
 		return nil
 	}
-	fi, err := os.Stat(path)
-	if err != nil {
-		return err
+	err := chainProblem(path, "/", statOwner, func(uid uint32) bool { return uid == 0 })
+	if oe, ok := err.(*ownerError); ok {
+		return fmt.Errorf("%s: not owned by root (uid %d)", oe.path, oe.uid)
 	}
-	st, ok := fi.Sys().(*syscall.Stat_t)
-	if !ok {
-		return fmt.Errorf("%s: cannot read its owner", path)
-	}
-	if st.Uid != 0 {
-		return fmt.Errorf("%s: not owned by root", path)
-	}
-	if fi.Mode().Perm()&0o022 != 0 {
-		return fmt.Errorf("%s: writable by group or others", path)
-	}
-	return nil
+	return err
 }
 
 func LoadRegion(l Layout) (*Region, error) {
@@ -351,6 +346,13 @@ func LoadMachine(l Layout) (*Machine, error) {
 		for _, f := range fp.Facts {
 			if err := claim(f, "fact provider "+name); err != nil {
 				return nil, err
+			}
+		}
+	}
+	for name, sf := range m.Surfaces {
+		if sf.Timeout != "" {
+			if d, err := time.ParseDuration(sf.Timeout); err != nil || d <= 0 {
+				return nil, fmt.Errorf("%s: surfaces.%s: timeout %q isn't a duration", l.MachineFile(), name, sf.Timeout)
 			}
 		}
 	}
@@ -465,6 +467,7 @@ func Load(l Layout, office string) (*Config, error) {
 	if o.Region != r.Region {
 		return nil, fmt.Errorf("office %s is in region %q, and this machine's region is %q", o.Name, o.Region, r.Region)
 	}
+	l.Recorder = m.Recorder
 	return &Config{L: l, Region: r, Machine: m, Office: o}, nil
 }
 

@@ -560,13 +560,110 @@ Every stage is timed: the placement carries `resolve_at`, `signed_at` and
 earlier ones (`stages` on the `launched` line), and `place.log` has the
 resolver's half.
 
+### Rules on the machine
+
+**State-file rules.** A machine-file plugin of kind `state-file` names a
+JSON file another service writes (`path`), how old it may be (`max_age`,
+required), and which fields mean what: `open_field` (a boolean),
+`reason_field`, `retry_after_field` (RFC 3339 or Unix seconds), `at_field`
+(the file's own timestamp; optional) and `facts` (fields exported as facts).
+No plugin code runs: the core reads the file. It fails closed: missing,
+unreadable, not a regular file, malformed, a wrong type in any named field,
+or older than `max_age` by its mtime or its own timestamp, whichever is
+older. In root mode the file and every directory above it must be root's and
+writable by nobody else, and a failure of that is an integrity failure (see
+below). Its verdict is the same for every job, so `describe` publishes it,
+read live each time (a gate flips every few seconds; a cached verdict would
+keep a resolver passing over an office that has opened), valid until the
+file would go stale. Its instances take no config. The office log carries
+the file's mtime where an exec rule's line carries its sha256.
+
+**Facts.** `[facts.<name>]` in the machine file is a provider: a pinned
+executable run like a plugin (empty environment, `/`, capped, killed at the
+rule timeout) that prints one JSON object of the facts it declares, at most
+every `interval`. The pull loop keeps readings for its lifetime; a one-shot
+command reads fresh. A rule receives only the facts its description
+declares, as `{value, at}`; a fact that is missing, whose provider failed,
+or that is older than twice its interval (or, from a state file, past
+`max_age`) is left out. A provider that fails is logged `fact-failed` with
+smoke. Two sources for one fact name is a config error.
+
+**Running work and the run phase.** A job whose surface started it (exit 0)
+gets a running record (`var/<office>/running/<id>.json`); it ends when the
+job reports `office done <office> <id>` or the owner stops it. Each pass of
+the pull job runs the run-phase rules (component `run`) for every running
+job before it takes in new post, every `rules.interval` (office, then
+region, default 10s) under `--loop`, and on any event. A closed result asks
+the job to do what the closing source's `on_closed` says: the instance's,
+else the office's, else the region's, else `yield`; for the owner's close
+it's the office's. The office host runs the surface's `hold` command with
+`OFFICE_ON_CLOSED` and `OFFICE_REASON`; `yield` and `finish-turn` leave the
+job `held`, `stop-next-turn` leaves it `stopping` (it ends when it reports
+done). `office yielded` is the job saying it reached its safe point. A held
+job is never re-placed. When its run-phase result is open again, the resume
+is re-checked (the binding, the holdings, the accept-phase rules; not
+expiry, which bounds starting, not running) and the surface's `resume`
+command runs. While any job is held, new placements wait ("holding …"). A
+surface with no `hold` command still has its jobs marked held, with smoke.
+
+`office close --now` marks the state; the pull job then holds every
+running job with `OFFICE_ON_CLOSED=now`, logged as the owner's stop.
+`office stop <office> <job>` leaves a request; the pull job runs the
+surface's `stop` and kills the job's process group. Owner and agent never
+talk directly: only the pull job, as the office, touches the office's
+agents.
+
+Repeated identical run-phase verdicts for one job and instance collapse:
+the first is logged when it comes; the repeats become one line with
+`count`, `first` and `last` when the verdict changes or the job ends.
+
+**Owner overrides, logged.** Each flip records what it replaced (`was`). An
+evaluation the owner's state decided carries it (`override`). An `until`
+that runs out is logged once (`state-expired`), and the loop wakes for it.
+
+**Integrity beats the owner.** A plugin whose sha256 doesn't match its pin,
+one with no pin, or a plugin or gate that isn't root's alone in root mode,
+closes the office even under the owner's `open`: the owner vouched for the
+rules, not for whatever is now at that path. A plain failure (a crash, a
+timeout, a bad answer) of a non-binding rule still yields to `open`.
+Plugins and providers run from the opened, hashed file (as
+`/proc/self/fd/3` on Linux), never re-opened by path; in root mode every
+directory above a config file, plugin or gate, up to `/`, must be root's
+and not writable by group or others.
+
+**Who can write what.** The owner's state is at `var/owner/<office>/state`
+and the decisions log (verdicts, evaluations, flips, expiries, stop
+requests) at `var/decisions/<office>.log`, both outside the office's own
+directory. In root mode the state, and every directory above it up to the
+var root, must be out of the office user's reach, or it's refused (closed);
+the office's own user can't open or close it. Decisions are written through
+the recorder: `sudo -n -u <recorder> office record <office>`, the machine
+file's `recorder` user, which takes decision lines only, so the pull job can
+add to the record but can't rewrite or remove it. The activity log
+(`var/<office>/log`) stays the office's. `office log` reads both in time
+order.
+
+**Surfaces.** Every surface command runs in its own process group, with
+the surface's `timeout` (default a minute); at the timeout the whole group
+is killed. In root mode its environment is built from nothing: a fixed
+`PATH`, the office user's home, the job's names, never the caller's
+`OFFICE_ROOT` or anything else.
+
+**The long-poll.** `office pull --loop` blocks in the transport's
+`Inbox.Wait` until mail lands (the `dir` transport waits on an inotify
+watch of the box on Linux and polls every `--interval` elsewhere), while
+checking the event fingerprint (the owner's state, the config files, the
+gate files, running work and requests) every `--interval`. It wakes for
+whichever comes first, or for a waiting placement's retry, an owner's
+`until`, or the run interval, and never sleeps past `--backstop`.
+
 ### Not yet
 
 Signatures (the requester's and the region's), peers and catalogs, the
-`state-file` kind, facts, the run phase and `on_closed`, `close --now`,
-`office stop`, the wrapper and daemon, and the evaluator's own user. Until
-then: `asked_by` is checked against the office's signers by name only, and
-rule plugins run as whoever runs the evaluation.
+wrapper and daemon, the `module` kind, and the evaluator's own user. Until
+then: `asked_by` is checked against the office's signers by name only, rule
+plugins run as whoever runs the evaluation (the office's user, in the pull
+job), and the resume re-check is the pull job's, not a wrapper's.
 
 ## The worktree-group hazard
 

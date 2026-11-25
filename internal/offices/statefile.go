@@ -8,7 +8,6 @@ import (
 	"os"
 	"sort"
 	"strconv"
-	"syscall"
 	"time"
 )
 
@@ -25,6 +24,12 @@ type Gate struct {
 }
 
 const maxGateFile = 64 << 10
+
+// integrityError is a gate that can't be trusted for who could have written
+// it, as opposed to one that is merely missing, stale or malformed.
+type integrityError struct{ what string }
+
+func (e *integrityError) Error() string { return e.what }
 
 // ReadGate reads and checks a state-file plugin's file. Every way the file
 // can't be trusted is an error, which the caller turns into a failed rule:
@@ -43,12 +48,10 @@ func ReadGate(name string, p Plugin, now time.Time) (*Gate, error) {
 		return nil, fmt.Errorf("its state file %s isn't a regular file", p.Path)
 	}
 	if rootMode {
-		st, ok := fi.Sys().(*syscall.Stat_t)
-		if !ok || st.Uid != 0 {
-			return nil, fmt.Errorf("its state file %s isn't owned by root", p.Path)
-		}
-		if fi.Mode().Perm()&0o022 != 0 {
-			return nil, fmt.Errorf("its state file %s is writable by group or others", p.Path)
+		// Root's, and so is every directory above it: a gate an office's
+		// user could write, or swap, is no gate.
+		if err := checkRootOwned(p.Path); err != nil {
+			return nil, &integrityError{fmt.Sprintf("its state file isn't root's alone: %v", err)}
 		}
 	}
 	f, err := os.Open(p.Path)
@@ -196,6 +199,9 @@ func (e *Evaluator) runStateFile(in Instance, p Plugin, phase string, now time.T
 		}
 	}
 	f := failed(in, err.Error())
+	if _, ok := err.(*integrityError); ok {
+		f = integrityFailed(in, err.Error())
+	}
 	f.StateMTime, f.MS = res.StateMTime, time.Since(start).Milliseconds()
 	return f
 }

@@ -267,6 +267,12 @@ agent. Read the exit, never re-implement a rule:
 - **1** an error, or `unplaceable`: no office holds what it needs. That's a
   setup gap to report, not something to retry.
 
+Once placed, the office keeps watching: if its rules or its owner close it,
+a running job is held where it is (its work kept) and resumes there when it
+opens. A held job is never yours to re-place: `bowery office describe
+<office>` shows it held and why. Only the owner ends one (`bowery office
+stop <office> <job>`).
+
 ## Remote dispatch (`--machine`, `--as`)
 
 For work on a shared box running its own herdr server, saved locally as a

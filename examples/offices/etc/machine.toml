@@ -1,6 +1,7 @@
 # The machine file: /usr/local/etc/offices/machine.toml (root:root 0644).
 machine   = "box-1"          # the office host runs only on the machine it names
 transport = "dir"            # the placement transport: boxes are directories under var/boxes
+recorder  = "offices-rec"    # root mode: the user that writes the decisions logs (via sudo)
 
 # An installed rule plugin. sha256 pins it: a plugin that changed since is a
 # failed rule, which closes the office.
@@ -10,10 +11,37 @@ path      = "/usr/local/lib/offices/rules/hours"
 sha256    = "<sha256sum of the installed binary>"
 contracts = [1]
 
+# A gate: a service on the machine writes this file every few seconds. No
+# plugin code runs; missing, malformed or older than max_age is closed.
+[plugins.desk-gate]
+kind              = "state-file"
+path              = "/run/desk-gate/state.json"
+max_age           = "60s"
+open_field        = "run"
+reason_field      = "reason"
+retry_after_field = "next_slot"
+at_field          = "at"
+[plugins.desk-gate.facts]
+idle_s           = "idle_s"
+mem_available_gb = "mem_available_gb"
+
+# A fact provider: prints {"load": …}, run at most every interval.
+# [facts.load]
+# path     = "/usr/local/lib/offices/facts/load"
+# sha256   = "…"
+# interval = "30s"
+# facts    = ["load"]
+
 # How an accepted job is started: the command gets the job as JSON on stdin,
-# and runs as the office (the pull job's user).
+# and runs as the office (the pull job's user), in its own process group.
+# hold, resume and stop are how the office asks a running job to yield,
+# carry on and end (OFFICE_ON_CLOSED, OFFICE_REASON in the environment).
 [surfaces.reviewer]
-command = ["/usr/local/lib/offices/surfaces/reviewer"]
+command = ["/usr/local/lib/offices/surfaces/reviewer", "start"]
+hold    = ["/usr/local/lib/offices/surfaces/reviewer", "hold"]
+resume  = ["/usr/local/lib/offices/surfaces/reviewer", "resume"]
+stop    = ["/usr/local/lib/offices/surfaces/reviewer", "stop"]
+timeout = "1m"
 
 # Rule instances for every office on this machine:
 # [[rules]]

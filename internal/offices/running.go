@@ -2,14 +2,15 @@ package offices
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -36,6 +37,7 @@ type Running struct {
 	HeldAt   string `json:"held_at,omitempty"`
 	Yielded  string `json:"yielded,omitempty"` // when the job said it reached its safe point
 	Resumed  int    `json:"resumed,omitempty"`
+	Pgid     int    `json:"pgid,omitempty"` // the process group its surface started it in
 }
 
 func (l Layout) RunningDir(o string) string  { return filepath.Join(l.Var, o, "running") }
@@ -107,10 +109,8 @@ func EndRunning(l Layout, office, id string) error {
 		return err
 	}
 	st := loadStreaks(l, office)
-	for _, flush := range st.end(id + "/") {
-		if err := Append(l, office, flush); err != nil {
-			return err
-		}
+	if err := AppendAll(l, office, st.end(id+"/")); err != nil {
+		return err
 	}
 	return st.save()
 }
@@ -215,6 +215,8 @@ func RunPhase(c *Config, ev, accept *Evaluator) ([]RunItem, error) {
 			r, err := GetRunning(c.L, o, rq.Job)
 			if err == nil {
 				code, why := surfaceCmd(c, r, "stop", nil)
+				// The owner's stop ends the job's whole process group.
+				killGroup(r.Pgid)
 				e := Entry{"event": "stopped", "job": r.ID, "by": "owner", "asked_by": rq.By, "was": r.State, "told": why == ""}
 				if why != "" {
 					e["why"], e["alert"] = why, Alert{"smoke", "couldn't tell " + r.ID + " to stop: " + why}
@@ -369,7 +371,7 @@ func surfaceCmd(c *Config, r *Running, which string, env map[string]string) (int
 	} else {
 		body, _ = json.Marshal(r)
 	}
-	code, err := runSurface(c, argv, body, r.ID, r.Surface, env)
+	code, _, err := runSurface(c, s, argv, body, r.ID, r.Surface, env)
 	if err != nil {
 		return 0, err.Error()
 	}
@@ -377,34 +379,84 @@ func surfaceCmd(c *Config, r *Running, which string, env map[string]string) (int
 }
 
 // runSurface runs a surface command as this process (the office's user in
-// root mode), with the job as JSON on stdin and a minute to finish.
-func runSurface(c *Config, argv []string, stdin []byte, id, surface string, extra map[string]string) (int, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+// root mode), with the job as JSON on stdin, in a process group of its own.
+// At the surface's timeout (default a minute) the whole group is killed, so
+// nothing it started outlives it unasked. It returns the exit code and the
+// group's id, which a job started this way keeps for the owner's stop.
+func runSurface(c *Config, s Surface, argv []string, stdin []byte, id, surface string, extra map[string]string) (int, int, error) {
+	timeout := Duration(s.Timeout, time.Minute)
+	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Stdin = bytes.NewReader(stdin)
-	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"),
-		"OFFICE_NAME=" + c.Office.Name, "OFFICE_JOB_ID=" + id, "OFFICE_SURFACE=" + surface}
-	if c.L.Dev {
-		cmd.Env = append(cmd.Env, "OFFICE_ROOT="+filepath.Dir(c.L.Etc))
+	cmd.Env = surfaceEnv(c, id, surface, extra)
+	cmd.Dir = "/"
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.WaitDelay = time.Second
+	if err := cmd.Start(); err != nil {
+		return 0, 0, err
 	}
+	pgid := cmd.Process.Pid
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	var err error
+	select {
+	case err = <-done:
+	case <-time.After(timeout):
+		_ = syscall.Kill(-pgid, syscall.SIGKILL)
+		<-done
+		return 0, pgid, fmt.Errorf("the surface timed out after %s (its process group was killed)", timeout)
+	}
+	if ee, ok := err.(*exec.ExitError); ok {
+		return ee.ExitCode(), pgid, nil
+	}
+	if err != nil {
+		return 0, pgid, err
+	}
+	return 0, pgid, nil
+}
+
+// surfaceEnv is a surface's whole environment. In root mode it is built
+// from nothing: a fixed PATH, the office user's home, the job's names, and
+// nothing of the caller's (no OFFICE_ROOT, no tokens). Dev mode passes the
+// caller's PATH and HOME and names its OFFICE_ROOT, as it says it does.
+func surfaceEnv(c *Config, id, surface string, extra map[string]string) []string {
+	var env []string
+	if c.L.Dev {
+		env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "OFFICE_ROOT=" + filepath.Dir(c.L.Etc)}
+	} else {
+		home := "/"
+		if u, err := user.Lookup(c.Office.User); err == nil && u.HomeDir != "" {
+			home = u.HomeDir
+		}
+		env = []string{"PATH=/usr/local/bin:/usr/bin:/bin", "HOME=" + home, "USER=" + c.Office.User, "LANG=C.UTF-8"}
+	}
+	env = append(env, "OFFICE_NAME="+c.Office.Name, "OFFICE_JOB_ID="+id, "OFFICE_SURFACE="+surface)
 	keys := make([]string, 0, len(extra))
 	for k := range extra {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
 	for _, k := range keys {
-		cmd.Env = append(cmd.Env, k+"="+extra[k])
+		env = append(env, k+"="+extra[k])
 	}
-	cmd.Dir = "/"
-	err := cmd.Run()
-	if ee, ok := err.(*exec.ExitError); ok {
-		return ee.ExitCode(), nil
+	return env
+}
+
+// killGroup ends what a job's surface left running in its group: TERM,
+// then KILL if anything is still there after two seconds.
+func killGroup(pgid int) {
+	if pgid <= 1 {
+		return
 	}
-	if err != nil {
-		return 0, err
+	if syscall.Kill(-pgid, syscall.SIGTERM) != nil {
+		return // nothing left in it
 	}
-	return 0, nil
+	for i := 0; i < 20; i++ {
+		time.Sleep(100 * time.Millisecond)
+		if syscall.Kill(-pgid, 0) != nil {
+			return
+		}
+	}
+	_ = syscall.Kill(-pgid, syscall.SIGKILL)
 }
 
 // ---------------------------------------------------------------- collapsing

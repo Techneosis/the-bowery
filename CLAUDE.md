@@ -19,15 +19,17 @@ Code setup.
 | `cmd/bowery/machine.go` | `--machine`: the current server, ssh, paths on the box |
 | `cmd/bowery/records.go` | dispatch records, and which server a name lives on |
 | `cmd/bowery/place.go` | `place`, `queue`, `office`, and dispatch's job flags: the resolver |
-| `cmd/office/` | the office host: `open/close/clear`, `describe` (and `--probe`), `pull`, `log`, `check`, `ls` |
+| `cmd/office/` | the office host: `open/close [--now]/clear`, `describe` (and `--probe`), `pull` (the run phase, then the inbox; `--loop` long-polls), `stop/done/yielded`, `record` (the recorder), `log`, `check`, `ls` |
 | `cmd/rules/hours/` | the reference rule plugin (exec kind, contract 1) |
-| `internal/offices/` | shared by both: config files, state, placements, holdings checks, the evaluator, the transport, the pull job |
+| `internal/offices/` | shared by both: config files, state, placements, holdings checks, the evaluator, state-file gates, facts, running work and the run phase, the transport, the pull job, the root-mode guards |
 | `completions/` | bash completion |
 | `agents/` | what ships to users' Claude Code: the skill, and the CLAUDE.md snippet |
 | `examples/config.toml` | every config key, with its default |
 | `install.sh` | piped/downloaded fetches a release, a checkout builds, an unpacked release installs its binary; `--claude-only` touches only Claude Code |
 | `scripts/package.sh` | builds and packages every release target, plus `SHA256SUMS` |
 | `tests/test_offices.py` | offices in dev mode (`OFFICE_ROOT`), with the real hours plugin and a scripted one |
+| `tests/test_offices_run.py` | rules on the machine: state-file gates, facts, the run phase and `on_closed`, owner overrides, the long-poll |
+| `tests/test_offices_review.py` | integrity beats the owner, the decisions log and recorder, fd exec, process groups, replay replies (root-mode halves in `internal/offices/rootmode_test.go`) |
 | `tests/` | `python3 -m unittest discover tests` and `go test ./...`: black-box, fake herdr and ssh (`tests/fakes/`), real git. Run before every commit |
 | `tests/live/dispatch.sh` | the same story against a real throwaway herdr server and real claude agents; run by hand when herdr changes or the fake does |
 | `docs/design.md` | the plain-language version: why each piece is the way it is |

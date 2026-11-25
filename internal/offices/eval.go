@@ -3,8 +3,6 @@ package offices
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -69,6 +67,7 @@ type InstanceResult struct {
 	// StateMTime is a state-file rule's file mtime, logged where an exec
 	// rule logs its sha256.
 	StateMTime string `json:"state_mtime,omitempty"`
+	Integrity  bool   `json:"integrity,omitempty"`
 }
 
 // Result is the combined answer for one job at one moment.
@@ -159,7 +158,7 @@ func (e *Evaluator) Evaluate(phase string, job *Job) (*Result, error) {
 		closer = nil
 		if by == "binding" {
 			for i := range res.Instances {
-				if r := res.Instances[i]; r.Binding && r.Verdict.Verdict == "closed" {
+				if r := res.Instances[i]; (r.Binding || r.Integrity) && r.Verdict.Verdict == "closed" {
 					in := r.Instance
 					closer = &in
 					break
@@ -185,6 +184,16 @@ func (e *Evaluator) Evaluate(phase string, job *Job) (*Result, error) {
 		e.cache(res, now)
 	}
 	return res, logErr
+}
+
+// integrityFailed is a failure of what the plugin is (a sha mismatch, a
+// missing pin, a plugin or state file that isn't root's in root mode):
+// unlike a crash or a bad answer, no owner's open overrides it.
+func integrityFailed(in Instance, what string) *InstanceResult {
+	f := failed(in, what)
+	f.Integrity = true
+	f.Verdict.Reason += " (an integrity failure: the owner's open doesn't override it)"
+	return f
 }
 
 func failed(in Instance, what string) *InstanceResult {
@@ -270,6 +279,12 @@ func applyOverride(res *Result, st *State, job *Job, now time.Time) string {
 		return "owner"
 	}
 	for _, r := range res.Instances {
+		if r.Integrity && r.Verdict.Verdict == "closed" {
+			res.Reason, res.By = r.Verdict.Reason, "rules"
+			return "binding"
+		}
+	}
+	for _, r := range res.Instances {
 		if r.Binding && r.Verdict.Verdict == "closed" {
 			res.Reason = r.Verdict.Reason + " (binding: the owner's open doesn't override it)"
 			res.By = "rules"
@@ -301,18 +316,13 @@ func (e *Evaluator) runInstance(in Instance, phase string, job *Job, now time.Ti
 	if !containsInt(p.Contracts, contract) {
 		return failed(in, fmt.Sprintf("plugin %s isn't installed for contract %d", in.Plugin, contract))
 	}
-	if err := checkRootOwned(p.Path); err != nil {
-		return failed(in, err.Error())
-	}
-	body, err := os.ReadFile(p.Path)
+	pf, got, err := openPinned(p.Path, p.SHA256)
 	if err != nil {
-		return failed(in, "can't read the plugin: "+err.Error())
+		f := integrityFailed(in, err.Error())
+		f.SHA256 = got
+		return f
 	}
-	sum := sha256.Sum256(body)
-	got := hex.EncodeToString(sum[:])
-	if p.SHA256 == "" || !strings.EqualFold(got, p.SHA256) {
-		return failed(in, "it doesn't match its pinned sha256")
-	}
+	defer pf.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), e.timeoutFor(in))
 	defer cancel()
 	start := time.Now()
@@ -323,7 +333,7 @@ func (e *Evaluator) runInstance(in Instance, phase string, job *Job, now time.Ti
 		f.SHA256, f.PluginVersion, f.MS = got, res.PluginVersion, time.Since(start).Milliseconds()
 		return f
 	}
-	desc, err := e.describe(ctx, in.Plugin, p.Path, got)
+	desc, err := e.describe(ctx, in.Plugin, pf, got)
 	if err != nil {
 		return fail(err.Error())
 	}
@@ -357,7 +367,7 @@ func (e *Evaluator) runInstance(in Instance, phase string, job *Job, now time.Ti
 	if err != nil {
 		return fail(err.Error())
 	}
-	out, err := runPlugin(ctx, p.Path, e.C.L.RuleState(in.Plugin), req, e.timeoutFor(in))
+	out, err := runPlugin(ctx, pf, e.C.L.RuleState(in.Plugin), req, e.timeoutFor(in))
 	if err != nil {
 		return fail(err.Error())
 	}
@@ -391,14 +401,14 @@ func normalize(c map[string]any) any {
 	return v
 }
 
-func (e *Evaluator) describe(ctx context.Context, plugin, path, sum string) (*Description, error) {
+func (e *Evaluator) describe(ctx context.Context, plugin string, pf *os.File, sum string) (*Description, error) {
 	e.mu.Lock()
 	d, ok := e.descs[sum]
 	e.mu.Unlock()
 	if ok {
 		return d, nil
 	}
-	out, err := runPlugin(ctx, path, e.C.L.RuleState(plugin), []byte(`{"contract": 1, "describe": true}`), 0)
+	out, err := runPlugin(ctx, pf, e.C.L.RuleState(plugin), []byte(`{"contract": 1, "describe": true}`), 0)
 	if err != nil {
 		return nil, fmt.Errorf("describe: %v", err)
 	}
@@ -439,18 +449,14 @@ func (e *Evaluator) Describe(plugin string) (*Description, error) {
 	if p.Kind != "exec" {
 		return nil, fmt.Errorf("plugin kind %q isn't supported by this office host", p.Kind)
 	}
-	body, err := os.ReadFile(p.Path)
+	pf, got, err := openPinned(p.Path, p.SHA256)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("plugin %s: %v (it is %s)", plugin, err, got)
 	}
-	sum := sha256.Sum256(body)
-	got := hex.EncodeToString(sum[:])
-	if !strings.EqualFold(got, p.SHA256) {
-		return nil, fmt.Errorf("plugin %s doesn't match its pinned sha256 (it is %s)", plugin, got)
-	}
+	defer pf.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), Duration(e.C.Region.Defaults.RuleTimeout, 2*time.Second))
 	defer cancel()
-	return e.describe(ctx, plugin, p.Path, got)
+	return e.describe(ctx, plugin, pf, got)
 }
 
 // cappedBuffer keeps the first maxStdout bytes and notes any more.
@@ -474,11 +480,11 @@ func (c *cappedBuffer) Write(p []byte) (int, error) {
 // runPlugin runs one exec plugin: the request on stdin, an environment built
 // from nothing but its private state directory, the working directory /,
 // stdout capped, killed (with its process group) at the deadline.
-func runPlugin(ctx context.Context, path, stateDir string, input []byte, _ time.Duration) ([]byte, error) {
+func runPlugin(ctx context.Context, pf *os.File, stateDir string, input []byte, _ time.Duration) ([]byte, error) {
 	if err := os.MkdirAll(stateDir, 0o700); err != nil {
 		return nil, fmt.Errorf("its state directory: %v", err)
 	}
-	cmd := exec.Command(path)
+	cmd := pinnedCommand(pf)
 	cmd.Env = []string{"OFFICE_RULE_STATE=" + stateDir}
 	cmd.Dir = "/"
 	cmd.Stdin = bytes.NewReader(input)
@@ -672,26 +678,21 @@ func (e *Evaluator) log(phase, job string, res *Result, now time.Time) error {
 	if phase == "run" {
 		st = loadStreaks(e.C.L, o)
 	}
+	// One write for the whole evaluation: in root mode each write is a
+	// trip through the recorder.
+	var lines []Entry
 	emit := func(key, sig string, line Entry, extra ...Entry) error {
 		if st != nil {
 			flush, write := st.see(key, sig, line, t)
 			if flush != nil {
-				if err := Append(e.C.L, o, flush); err != nil {
-					return err
-				}
+				lines = append(lines, flush)
 			}
 			if !write {
 				return nil
 			}
 		}
-		if err := Append(e.C.L, o, line); err != nil {
-			return err
-		}
-		for _, x := range extra {
-			if err := Append(e.C.L, o, x); err != nil {
-				return err
-			}
-		}
+		lines = append(lines, line)
+		lines = append(lines, extra...)
 		return nil
 	}
 	for _, r := range res.Instances {
@@ -727,6 +728,9 @@ func (e *Evaluator) log(phase, job string, res *Result, now time.Time) error {
 	}
 	sig := strings.Join([]string{res.Verdict, res.Reason, res.RetryAfter, res.By, res.OnClosed}, "\x00")
 	if err := emit(job+"/", sig, line); err != nil {
+		return err
+	}
+	if err := AppendAll(e.C.L, o, lines); err != nil {
 		return err
 	}
 	if st != nil {

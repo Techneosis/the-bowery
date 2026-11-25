@@ -24,6 +24,13 @@ type State struct {
 
 // ReadState returns nil when there is no override.
 func ReadState(l Layout, office string) (*State, error) {
+	if !l.Dev {
+		// The office's user must never be able to flip its own state: the
+		// file and every directory above it are out of its reach.
+		if err := notOfficeWritable(l, office, l.StateFile(office)); err != nil {
+			return nil, err
+		}
+	}
 	b, err := os.ReadFile(l.StateFile(office))
 	if os.IsNotExist(err) {
 		return nil, nil

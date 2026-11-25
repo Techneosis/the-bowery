@@ -3,13 +3,9 @@ package offices
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"os"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 )
@@ -133,20 +129,14 @@ func FactSource(m *Machine, fact string) string {
 // empty environment, in /, capped, killed at the rule timeout. It prints
 // one JSON object of the facts it declared; any other name is an error.
 func (e *Evaluator) runProvider(name string, fp FactProvider) (map[string]any, error) {
-	if err := checkRootOwned(fp.Path); err != nil {
+	pf, _, err := openPinned(fp.Path, fp.SHA256)
+	if err != nil {
 		return nil, err
 	}
-	body, err := os.ReadFile(fp.Path)
-	if err != nil {
-		return nil, fmt.Errorf("can't read it: %v", err)
-	}
-	sum := sha256.Sum256(body)
-	if !strings.EqualFold(hex.EncodeToString(sum[:]), fp.SHA256) {
-		return nil, fmt.Errorf("it doesn't match its pinned sha256")
-	}
+	defer pf.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), Duration(e.C.Region.Defaults.RuleTimeout, 2*time.Second))
 	defer cancel()
-	out, err := runPlugin(ctx, fp.Path, e.C.L.RuleState("facts-"+name), []byte("{}"), 0)
+	out, err := runPlugin(ctx, pf, e.C.L.RuleState("facts-"+name), []byte("{}"), 0)
 	if err != nil {
 		return nil, err
 	}

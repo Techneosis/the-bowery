@@ -58,7 +58,7 @@ print(open(cfg["file"]).read())
 
 PROVIDER = f"""#!{sys.executable}
 import json, os, sys
-mode = open(os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), "provider.mode")).read().strip()
+mode = open("@MODE@").read().strip()  # plugins run as /proc/self/fd/3: no path of their own
 if mode == "crash":
     sys.exit(2)
 if mode == "extra":
@@ -82,7 +82,7 @@ class Run(Offices):
         self.factful.write_text(FACTFUL)
         self.factful.chmod(0o755)
         self.provider = self.lib / "provider"
-        self.provider.write_text(PROVIDER)
+        self.provider.write_text(PROVIDER.replace("@MODE@", str(self.lib / "provider.mode")))
         self.provider.chmod(0o755)
         (self.lib / "provider.mode").write_text("ok")
         self.set_gate(True)
@@ -90,7 +90,7 @@ class Run(Offices):
 
     def gate_plugins(self, at_field=True, max_age="60s"):
         s = textwrap.dedent(f"""
-            [plugins.gauntlets]
+            [plugins.desk-gate]
             kind              = "state-file"
             path              = "{self.gate}"
             max_age           = "{max_age}"
@@ -101,7 +101,7 @@ class Run(Offices):
         if at_field:
             s += 'at_field          = "at"\n'
         s += textwrap.dedent(f"""\
-            [plugins.gauntlets.facts]
+            [plugins.desk-gate.facts]
             idle_s           = "idle_s"
             mem_available_gb = "mem_available_gb"
 
@@ -140,7 +140,7 @@ class Run(Offices):
         os.utime(self.gate, (t, t))
 
     def gate_rule(self, name="gate", on_closed=None, at=None):
-        s = f'\n[[rules.use]]\nname = "{name}"\nplugin = "gauntlets"\n'
+        s = f'\n[[rules.use]]\nname = "{name}"\nplugin = "desk-gate"\n'
         if on_closed:
             s += f'on_closed = "{on_closed}"\n'
         if at:
@@ -312,10 +312,10 @@ class StateFile(Run):
         self.assertLess(vu, datetime.now(timezone.utc) + timedelta(seconds=61))
         # No reason in the file still closes, with one of its own.
         self.set_gate(False)
-        self.assertEqual(self.probe_reason()["reason"], "gauntlets is closed")
+        self.assertEqual(self.probe_reason()["reason"], "desk-gate is closed")
         # The log line carries the file's mtime where an exec rule's sha256 goes.
         v = self.events(self.REVIEWS, "verdict")[-1]
-        self.assertEqual(v["plugin"], "gauntlets")
+        self.assertEqual(v["plugin"], "desk-gate")
         self.assertIn("state_mtime", v)
 
     def test_a_state_file_rule_takes_no_config_and_needs_max_age(self):

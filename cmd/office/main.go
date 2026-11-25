@@ -43,6 +43,9 @@ const usage = `office: the office host. Opens and closes offices, judges placeme
                                            every --interval, runs a pass on either, at a retry
                                            or the run phase's interval, or at the backstop
   office log <office> [--since DUR] [--json]
+                                           the activity log and the decisions log, in time order
+  office record <office>                   the recorder: append decision lines (stdin); root mode
+                                           runs it as the machine file's recorder, through sudo
   office check <office>                    the install checks: plugins, contracts, phases, schemas, tier
   office version
 
@@ -101,6 +104,8 @@ func main() {
 		cmdFlip(cmd, rest)
 	case "stop", "done", "yielded":
 		cmdJob(cmd, rest)
+	case "record":
+		cmdRecord(rest)
 	case "pull":
 		cmdPull(rest)
 	case "log":
@@ -175,6 +180,7 @@ func load(office string) *offices.Config {
 	if err != nil {
 		die("%v", err)
 	}
+	layout.Recorder = c.L.Recorder
 	return c
 }
 
@@ -356,6 +362,9 @@ func cmdFlip(cmd string, args []string) {
 	if !layout.Dev && !contains(c.Office.Owner, me) {
 		die("%s isn't an owner of %s (owners: %s)", me, c.Office.Name, strings.Join(c.Office.Owner, ", "))
 	}
+	if !layout.Dev && me == c.Office.User {
+		die("the office's own user can't open or close it")
+	}
 	t := now().UTC()
 	entry := offices.Entry{"event": "state", "by": me}
 	// The flip records what it replaced, so the log alone says who
@@ -453,6 +462,44 @@ func cmdJob(cmd string, args []string) {
 			die("%v", err)
 		}
 		fmt.Printf("%s: %s yielded; held until the office opens\n", c.Office.Name, id)
+	}
+}
+
+// cmdRecord is the recorder: it appends decision lines (JSON, one per line,
+// on stdin) to the office's decisions log, and refuses anything that isn't
+// a decision. In root mode it runs only as the machine file's recorder, by
+// way of sudo from the pull job and the owner's commands.
+func cmdRecord(args []string) {
+	f := parse(args, nil, nil)
+	need(f, "record")
+	c := load(f.office)
+	if !layout.Dev && (c.Machine.Recorder == "" || offices.Whoami() != c.Machine.Recorder) {
+		die("record runs as the machine file's recorder (%q), not %s", c.Machine.Recorder, offices.Whoami())
+	}
+	b, err := io.ReadAll(io.LimitReader(os.Stdin, 8<<20))
+	if err != nil {
+		die("%v", err)
+	}
+	var lines [][]byte
+	for _, l := range strings.Split(string(b), "\n") {
+		if strings.TrimSpace(l) == "" {
+			continue
+		}
+		e := offices.Entry{}
+		if err := json.Unmarshal([]byte(l), &e); err != nil {
+			die("a line that isn't a JSON object: %v", err)
+		}
+		if _, ok := e["office"]; !ok {
+			e["office"] = c.Office.Name
+		}
+		if _, ok := e["time"]; !ok {
+			e["time"] = offices.Stamp(time.Now())
+		}
+		nb, _ := json.Marshal(e)
+		lines = append(lines, nb)
+	}
+	if err := offices.RecordDecisions(layout, c.Office.Name, lines); err != nil {
+		die("%v", err)
 	}
 }
 

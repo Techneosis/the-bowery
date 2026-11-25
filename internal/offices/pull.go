@@ -222,8 +222,22 @@ func Pull(c *Config, ev *Evaluator, t Transport, in Inbox, force bool) (*PullRep
 			continue
 		}
 		if _, err := os.Stat(filepath.Join(c.L.Accepted(o), j.ID+".placement")); err == nil {
-			// One per placement id: a replay maps to the one already made.
-			if err := Append(c.L, o, Entry{"event": "place-duplicate", "job": j.ID}); err != nil {
+			// One per placement id: a replay maps to the one already made,
+			// and its asker hears so once (refused and expired ids aren't
+			// here: they are judged again).
+			replied := false
+			if err := os.MkdirAll(c.L.Replied(o), 0o755); err == nil {
+				if f, err := os.OpenFile(filepath.Join(c.L.Replied(o), j.ID), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644); err == nil {
+					f.Close()
+					replied = true
+					if err := t.Reply(j.AskedBy, j.ID, []byte(fmt.Sprintf("already accepted %s at %s; a replay starts nothing\n", j.ID, o))); err != nil {
+						if err := Append(c.L, o, Entry{"event": "reply-failed", "job": j.ID, "why": err.Error()}); err != nil {
+							return nil, err
+						}
+					}
+				}
+			}
+			if err := Append(c.L, o, Entry{"event": "place-duplicate", "job": j.ID, "replied": replied}); err != nil {
 				return nil, err
 			}
 			_ = in.Done(l, "")
@@ -317,7 +331,7 @@ func Pull(c *Config, ev *Evaluator, t Transport, in Inbox, force bool) (*PullRep
 		}
 		surface := launchSurface(c, j)
 		item := PullItem{ID: j.ID, Surface: surface}
-		code, lerr := launch(c, j)
+		code, pgid, lerr := launch(c, j)
 		startedAt := Stamp(time.Now())
 		if lerr != nil {
 			if err := Append(c.L, o, Entry{"event": "launch-failed", "job": j.ID, "surface": surface, "why": lerr.Error()}); err != nil {
@@ -334,7 +348,7 @@ func Pull(c *Config, ev *Evaluator, t Transport, in Inbox, force bool) (*PullRep
 			// until the job reports done or the owner stops it.
 			if code == 0 {
 				r := &Running{ID: j.ID, Office: o, Kind: j.Kind, Priority: j.Priority, AskedBy: j.AskedBy, Scope: j.Scope,
-					Surface: surface, Started: startedAt, State: "running"}
+					Surface: surface, Started: startedAt, State: "running", Pgid: pgid}
 				if err := PutRunning(c.L, r); err != nil {
 					return nil, err
 				}
@@ -392,14 +406,14 @@ func launchSurface(c *Config, j *Job) string {
 	return surface
 }
 
-func launch(c *Config, j *Job) (int, error) {
+func launch(c *Config, j *Job) (int, int, error) {
 	surface := launchSurface(c, j)
 	s, ok := c.Machine.Surfaces[surface]
 	if !ok || len(s.Command) == 0 {
-		return 0, fmt.Errorf("surface %q has no command on this machine", surface)
+		return 0, 0, fmt.Errorf("surface %q has no command on this machine", surface)
 	}
 	b, _ := json.Marshal(j)
-	return runSurface(c, s.Command, b, j.ID, surface, nil)
+	return runSurface(c, s, s.Command, b, j.ID, surface, nil)
 }
 
 // NextDue is when the pull loop must look again even with no mail or

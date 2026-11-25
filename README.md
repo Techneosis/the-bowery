@@ -194,10 +194,35 @@ holds what it needs) isn't kept waiting: that's a setup gap, said plainly.
 
 The office checks every placement again when it takes it in (its pull job,
 `office pull`), runs its rules again, and only then starts the agent. A rule
-that crashes, hangs or talks nonsense counts as a shut door. Every verdict,
-every opening and closing, and the time of each stage (resolve, sign, send,
-delivered, accepted, started) is written in the office's own log and in
-bowery's `place.log`.
+that crashes, hangs or talks nonsense counts as a shut door, and a rule
+plugin that isn't the one that was pinned shuts it even against the owner's
+word. Every verdict and every opening and closing goes in the office's
+decisions book, which its own staff can add to but never rewrite; the rest
+(what came in, what started) and the time of each stage (resolve, sign,
+send, delivered, accepted, started) go in its daybook, and bowery keeps
+`place.log`.
+
+**A gate on the door.** A service on the machine can keep a sign in the
+window: a small file saying whether the room is open, why not, and when it
+next will be (a state-file rule). The office reads the sign and trusts it
+only while it is fresh: a sign that's missing, garbled, or older than its
+`max_age` means the door is shut. The same sign can post readings beside it
+(how long the desk has been idle, how much memory is free), and so can small
+meters of their own; a rule reads only the readings it asked for.
+
+**When the door shuts on work in progress.** Rules keep watching while an
+agent works (the run phase). If one shuts the door, or the owner does, the
+agent is asked to do what that rule says: **yield** at its next safe point,
+**finish its turn**, or **stop at its next turn** and go home. A yielded
+agent keeps its desk, its papers and its claimed work, and nobody else is
+sent in to start it over: when the door opens again it is checked in again
+and carries on where it was. While someone is held, no new job starts.
+`office close --now` stops everyone at once (work kept), and `office stop`
+sends a held agent home for good.
+
+The office takes in its post with a **long-poll**: it sits by the letterbox
+and wakes the moment a letter lands, glances at its signs every `--interval`,
+and looks round anyway at the backstop.
 
 ```
 bowery place --kind review --needs tools=git -- "review PR 12"   # 0 placed, 4 waiting, 3 refused, 1 error
@@ -205,8 +230,10 @@ bowery dispatch rev --job-kind review --office region-a-reviews -- "review PR 12
 office close region-a-reviews --until 2h    # the owner's word beats the rules
 office open region-a-reviews
 bowery place --retry
+office close region-a-reviews --now         # and stop the work in progress, kept
+office stop region-a-reviews rev-12         # send a held agent home
 office pull region-a-reviews --loop         # the office taking in its post
-office log region-a-reviews --since 1h
+office log region-a-reviews --since 1h      # the daybook and the decisions book
 ```
 
 `OFFICE_ROOT=<dir>` runs every office under one directory as you, for trying

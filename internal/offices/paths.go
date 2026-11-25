@@ -21,7 +21,10 @@ import (
 type Layout struct {
 	Dev bool
 	Etc string // region.toml, machine.toml, <office>/office.toml
-	Var string // <office>/{state,log,accepted,...}, boxes/<box>, rules/<plugin>
+	Var string // <office>/{log,accepted,...}, owner/<office>/state, decisions/<office>.log, boxes/<box>, rules/<plugin>
+	// Recorder is the user that writes the decisions logs in root mode
+	// (the machine file's `recorder`); the office's own user never does.
+	Recorder string
 }
 
 func DetectLayout() Layout {
@@ -42,19 +45,28 @@ func (l Layout) DevNotice() string {
 		"that commands run as the office's user, or that an owner is the one opening or closing", filepath.Dir(l.Etc))
 }
 
-func (l Layout) RegionFile() string           { return filepath.Join(l.Etc, "region.toml") }
-func (l Layout) MachineFile() string          { return filepath.Join(l.Etc, "machine.toml") }
-func (l Layout) OfficeDir(o string) string    { return filepath.Join(l.Etc, o) }
-func (l Layout) OfficeFile(o string) string   { return filepath.Join(l.Etc, o, "office.toml") }
-func (l Layout) VarDir(o string) string       { return filepath.Join(l.Var, o) }
-func (l Layout) StateFile(o string) string    { return filepath.Join(l.Var, o, "state") }
-func (l Layout) LogFile(o string) string      { return filepath.Join(l.Var, o, "log") }
-func (l Layout) Accepted(o string) string     { return filepath.Join(l.Var, o, "accepted") }
-func (l Layout) Refused(o string) string      { return filepath.Join(l.Var, o, "refused") }
-func (l Layout) Expired(o string) string      { return filepath.Join(l.Var, o, "expired") }
-func (l Layout) VerdictCache(o string) string { return filepath.Join(l.Var, o, "verdicts.json") }
-func (l Layout) BoxDir(box string) string     { return filepath.Join(l.Var, "boxes", box) }
-func (l Layout) RuleState(p string) string    { return filepath.Join(l.Var, "rules", p) }
+func (l Layout) RegionFile() string         { return filepath.Join(l.Etc, "region.toml") }
+func (l Layout) MachineFile() string        { return filepath.Join(l.Etc, "machine.toml") }
+func (l Layout) OfficeDir(o string) string  { return filepath.Join(l.Etc, o) }
+func (l Layout) OfficeFile(o string) string { return filepath.Join(l.Etc, o, "office.toml") }
+func (l Layout) VarDir(o string) string     { return filepath.Join(l.Var, o) }
+
+// StateFile is the owner's override. It lives outside the office's own
+// directory, which the office's user can write, so that user can never
+// flip its own state.
+func (l Layout) StateFile(o string) string { return filepath.Join(l.Var, "owner", o, "state") }
+
+// DecisionsFile is the record of every verdict and every owner flip, apart
+// from the office's activity log and out of its user's reach.
+func (l Layout) DecisionsFile(o string) string { return filepath.Join(l.Var, "decisions", o+".log") }
+func (l Layout) LogFile(o string) string       { return filepath.Join(l.Var, o, "log") }
+func (l Layout) Accepted(o string) string      { return filepath.Join(l.Var, o, "accepted") }
+func (l Layout) Refused(o string) string       { return filepath.Join(l.Var, o, "refused") }
+func (l Layout) Expired(o string) string       { return filepath.Join(l.Var, o, "expired") }
+func (l Layout) Replied(o string) string       { return filepath.Join(l.Var, o, "replied") }
+func (l Layout) VerdictCache(o string) string  { return filepath.Join(l.Var, o, "verdicts.json") }
+func (l Layout) BoxDir(box string) string      { return filepath.Join(l.Var, "boxes", box) }
+func (l Layout) RuleState(p string) string     { return filepath.Join(l.Var, "rules", p) }
 
 // ThisMachine is the short host name: what the machine file's `machine`
 // must say.

@@ -19,10 +19,16 @@ tools = ["git"]
 repos = "repos"
 
 [rules]
-default = "closed"           # when no rule has an opinion
+default   = "closed"         # when no rule has an opinion
+on_closed = "yield"          # what a closing rule (or the owner) asks of running work
+interval  = "10s"            # how often run-phase rules look at running work
 
 [[rules.use]]
 name   = "work-hours"
 plugin = "hours"
 [rules.use.config]
 windows = ["Mon..Fri 09:00-17:00"]
+
+[[rules.use]]
+name   = "desk"
+plugin = "desk-gate"         # the gate above: open in a slot and while nobody is at the desk

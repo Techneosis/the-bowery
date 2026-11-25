@@ -228,8 +228,12 @@ class Offices(unittest.TestCase):
         return json.loads(r.stdout), r
 
     def log(self, office):
-        p = self.var / office / "log"
-        return [json.loads(l) for l in p.read_text().splitlines()] if p.exists() else []
+        # The office's activity log and its decisions log, in time order.
+        out = []
+        for p in (self.var / office / "log", self.var / "decisions" / f"{office}.log"):
+            if p.exists():
+                out += [json.loads(l) for l in p.read_text().splitlines()]
+        return sorted(out, key=lambda e: e["time"])
 
     def events(self, office, kind):
         return [e for e in self.log(office) if e["event"] == kind]
@@ -806,7 +810,7 @@ class Review(Pull):
         self.assertTrue((self.state / "queue" / "mute-1.json").exists())
 
     def test_a_state_file_with_a_bad_until_closes_rather_than_never_expiring(self):
-        d = self.var / self.REVIEWS
+        d = self.var / "owner" / self.REVIEWS  # the owner's state, out of the office's own directory
         d.mkdir(parents=True, exist_ok=True)
         (d / "state").write_text(json.dumps({"state": "open", "until": "tomorrow", "by": "alice", "at": "2026-01-01T00:00:00Z"}))
         res = self.probe(self.REVIEWS, self.job())
