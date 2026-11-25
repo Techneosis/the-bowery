@@ -718,7 +718,7 @@ paths and nothing else, and never lists anything:
 | request | what it does |
 |---|---|
 | `POST /placements/<box>` | stores the letter as `<id>.placement` in the box of an office on this machine (the box is matched against the region file's offices for this machine; anything else is 404). The id comes from the letter, which must decode as a placement (400 if not); an id already in the box is 409; a box already holding 256 is 503 |
-| `POST /replies/<asker>?id=<id>` | stores a reply as `<id>.reply` in `asker-<asker>` |
+| `POST /replies/<asker>?id=<id>` | stores a reply as `<id>.reply` in `asker-<asker>`, a box that must already exist (404 otherwise: a stranger can't make the machine grow a directory per name) |
 | `GET /catalog/<peer>` | the catalog `office publish` kept for that peer (under `var/published/<peer>/`), with the machine in `X-Office-Machine`; 404 if there is none |
 
 A body is `text/plain` (charset utf-8 or none), at most 64 KiB for a

@@ -322,7 +322,14 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		s.store(w, r, s.L.BoxDir(box), MaxPlacement, true, fail)
 	case "replies":
-		s.store(w, r, s.L.BoxDir("asker-"+name), MaxReply, false, fail)
+		// Only to an asker's box that is already there: a stranger can't
+		// make this machine grow a directory per name.
+		dir := s.L.BoxDir("asker-" + name)
+		if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
+			fail(http.StatusNotFound, "not found")
+			return
+		}
+		s.store(w, r, dir, MaxReply, false, fail)
 	}
 }
 

@@ -76,7 +76,8 @@ func TestTheEndpointStoresAPlacementInTheBox(t *testing.T) {
 	if r := post(t, srv.URL+"/placements/office-reviews", textType, []byte("hello\n")); r.StatusCode != http.StatusBadRequest {
 		t.Fatalf("junk: %s", r.Status)
 	}
-	// A reply, by id.
+	// A reply, by id, into an asker's box that exists.
+	os.MkdirAll(l.BoxDir("asker-bob"), 0o755)
 	if r := post(t, srv.URL+"/replies/bob?id=p-1", textType, []byte("refused p-1\n")); r.StatusCode != http.StatusCreated {
 		t.Fatalf("reply: %s", r.Status)
 	}
@@ -108,6 +109,7 @@ func TestTheEndpointRefusesAnOversizedBody(t *testing.T) {
 	if resp.StatusCode != http.StatusRequestEntityTooLarge {
 		t.Fatalf("oversized chunked placement: %s", resp.Status)
 	}
+	os.MkdirAll(l.BoxDir("asker-bob"), 0o755)
 	if r := post(t, srv.URL+"/replies/bob?id=p-1", textType, bytes.Repeat([]byte("x"), MaxReply+1)); r.StatusCode != http.StatusRequestEntityTooLarge {
 		t.Fatalf("oversized reply: %s", r.Status)
 	}
@@ -200,6 +202,7 @@ func TestTheClientCarriesPlacementsRepliesAndCatalogs(t *testing.T) {
 		t.Fatalf("send to no such box: %v", err)
 	}
 	ta := NewHTTPTransport(a, 0)
+	os.MkdirAll(b.BoxDir("asker-bob"), 0o755)
 	if err := ta.Reply(sb.URL, "bob", "p-2", []byte("refused p-2\n")); err != nil {
 		t.Fatal(err)
 	}
@@ -281,5 +284,66 @@ func TestAPostWakesThePullLoopWithin50ms(t *testing.T) {
 		case <-time.After(2 * time.Second):
 			t.Fatal("the POST didn't wake the loop")
 		}
+	}
+}
+
+// Two copies of one id arriving together: exactly one is stored, and the
+// other is told 409. A stat followed by a rename lets the later body replace
+// the earlier one.
+func TestConcurrentPostsOfOneIdStoreOneAndRefuseTheRest(t *testing.T) {
+	l := endpointLayout(t)
+	srv := httptest.NewServer(&Server{L: l})
+	defer srv.Close()
+	const n = 40
+	codes := make(chan int, n)
+	start := make(chan struct{})
+	for i := 0; i < n; i++ {
+		go func(i int) {
+			body := bytes.Replace(placementBody("p-race"), []byte("bob"), []byte(fmt.Sprintf("bob%d", i)), 1)
+			<-start
+			req, _ := http.NewRequest(http.MethodPost, srv.URL+"/placements/office-reviews", bytes.NewReader(body))
+			req.Header.Set("Content-Type", textType)
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				codes <- 0
+				return
+			}
+			resp.Body.Close()
+			codes <- resp.StatusCode
+		}(i)
+	}
+	close(start)
+	created := 0
+	for i := 0; i < n; i++ {
+		switch c := <-codes; c {
+		case http.StatusCreated:
+			created++
+		case http.StatusConflict:
+		default:
+			t.Fatalf("status %d", c)
+		}
+	}
+	if created != 1 {
+		t.Fatalf("%d copies of one id were accepted", created)
+	}
+}
+
+// A reply goes into an asker's box that is already there. A stranger can't
+// make the machine grow a directory per name.
+func TestARepliesDoesNotMakeAnAskerBox(t *testing.T) {
+	l := endpointLayout(t)
+	srv := httptest.NewServer(&Server{L: l})
+	defer srv.Close()
+	if r := post(t, srv.URL+"/replies/nobody?id=p-1", textType, []byte("hello\n")); r.StatusCode != http.StatusNotFound {
+		t.Fatalf("a reply to an unknown asker: %s", r.Status)
+	}
+	if _, err := os.Stat(l.BoxDir("asker-nobody")); err == nil {
+		t.Fatal("the endpoint made a box for a name it was never given a letter from")
+	}
+	if err := os.MkdirAll(l.BoxDir("asker-bob"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if r := post(t, srv.URL+"/replies/bob?id=p-1", textType, []byte("hello\n")); r.StatusCode != http.StatusCreated {
+		t.Fatalf("a reply to a known asker: %s", r.Status)
 	}
 }

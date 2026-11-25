@@ -16,6 +16,7 @@ import re
 import subprocess
 import time
 import unittest
+from pathlib import Path
 import urllib.error
 import urllib.request
 
@@ -30,6 +31,10 @@ class OverHTTP:
         self.a_url = self.b_url = "http://127.0.0.1:9"  # nobody, until the endpoints are up
         super().setUp()
         (self.b_root / "etc" / "machine.toml").write_text(f'machine = "{HOST}"\ntransport = "http"\n')
+        # An asker's box is there before a reply comes (the install makes it): the endpoint only fills one.
+        for var in (self.a_var, self.b_root / "var"):
+            for asker in ("bob", "alice"):
+                (Path(var) / "boxes" / f"asker-{asker}").mkdir(parents=True, exist_ok=True)
         self.a_url = self.serve(self.env)
         self.b_url = self.serve(self.b_env)
         # The peer entries again, now with the endpoints' URLs.

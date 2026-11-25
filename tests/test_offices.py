@@ -373,8 +373,12 @@ class Stages(Offices):
         st = launched["stages"]
         stages = ("resolve", "sign", "send", "delivered", "verified", "accepted", "started")
         self.assertEqual(list(sorted(st)), sorted(stages))
-        order = [st[k] for k in stages]
-        self.assertEqual(order, sorted(order))
+        # "send" is the letter file's mtime, which the kernel stamps from a coarse clock that can read a few
+        # milliseconds behind: a stage is never earlier than its predecessor by more than that.
+        from datetime import datetime
+        order = [datetime.fromisoformat(st[k].replace("Z", "+00:00")).timestamp() for k in stages]
+        for (a, b), k in zip(zip(order, order[1:]), stages[1:]):
+            self.assertGreaterEqual(b, a - 0.02, f"{k} is before the stage ahead of it: {st}")
         self.assertIn("stages", self.place_log()[-1])
 
     def test_the_pull_loop_takes_a_placement_within_its_interval(self):

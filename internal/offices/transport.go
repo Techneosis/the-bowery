@@ -206,7 +206,39 @@ func dropFile(dir, name string, body []byte) error {
 	if _, err := os.Stat(dst); err == nil {
 		return ErrInBox
 	}
-	return WriteAtomic(dst, body, 0o644)
+	return writeNew(dst, body)
+}
+
+// writeNew puts body at dst only if nothing is there: the file is written
+// whole under a temporary name and then linked into place, which fails if dst
+// exists, so two writers of one id can't replace each other (a stat before a
+// rename can't promise that). Where hard links aren't allowed it falls back to
+// a rename.
+func writeNew(dst string, body []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(dst), "."+filepath.Base(dst)+".*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.Write(body); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(0o644); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	switch err := os.Link(tmp.Name(), dst); {
+	case err == nil:
+		return nil
+	case errors.Is(err, os.ErrExist):
+		return ErrInBox
+	default:
+		return os.Rename(tmp.Name(), dst)
+	}
 }
 
 // ErrInBox is a letter whose id is already waiting in the box.
