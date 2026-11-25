@@ -28,6 +28,10 @@ type PullReport struct {
 	Refused   []PullItem `json:"refused"`
 	Dropped   []PullItem `json:"dropped"`
 	NextRetry string     `json:"next_retry,omitempty"`
+	// Events is the fingerprint the pass judged by, taken before it judged
+	// anything: the long-poll compares against it, so a change that landed
+	// mid-pass is seen, not slept through.
+	Events string `json:"-"`
 }
 
 // pending is what the pull job remembers about a placement it keeps
@@ -194,6 +198,7 @@ func Pull(c *Config, ev *Evaluator, t Transport, in Inbox, force bool) (*PullRep
 		return items[a].j.SignedAt < items[b].j.SignedAt
 	})
 	events := c.Events()
+	rep.Events = events
 	tick := Duration(c.Region.Defaults.RetryTick, 10*time.Minute)
 	cat := CatalogOf(c)
 	for _, it := range items {
@@ -422,7 +427,10 @@ func launch(c *Config, j *Job) (int, int, error) {
 func NextDue(c *Config, rep *PullReport, now time.Time) time.Time {
 	var due time.Time
 	consider := func(t time.Time) {
-		if !t.IsZero() && (due.IsZero() || t.Before(due)) {
+		// A time that has already passed is a stale hint (a gate whose
+		// next_slot lags): waking for it would spin the loop. The events
+		// and the backstop cover it.
+		if !t.IsZero() && t.After(now) && (due.IsZero() || t.Before(due)) {
 			due = t
 		}
 	}

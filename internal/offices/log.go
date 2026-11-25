@@ -115,6 +115,18 @@ func RecordDecisions(l Layout, office string, lines [][]byte) error {
 	return appendLines(p, lines)
 }
 
+// RecorderCallerOK says whether the user who reached the recorder through
+// sudo (SUDO_USER) may write this office's decisions: the office's own user
+// (its pull job) or one of its owners. Any other caller, such as another
+// office's user the sudoers line also admits, would forge this office's
+// record. "" is no sudo at all: the recorder itself.
+func RecorderCallerOK(c *Config, sudoUser string) error {
+	if sudoUser == "" || sudoUser == c.Office.User || contains(c.Office.Owner, sudoUser) {
+		return nil
+	}
+	return fmt.Errorf("%s is neither %s's user nor one of its owners, so it can't record for it", sudoUser, c.Office.Name)
+}
+
 // notOfficeWritable: in root mode, path (or, before it exists, its nearest
 // existing parent) and every directory above it up to the var root are owned by
 // someone other than the office's user and writable by nobody else.

@@ -25,6 +25,10 @@ type Gate struct {
 
 const maxGateFile = 64 << 10
 
+// gateSkew is how far ahead of this machine's clock a gate's own time may
+// be before it is distrusted.
+const gateSkew = 5 * time.Second
+
 // integrityError is a gate that can't be trusted for who could have written
 // it, as opposed to one that is merely missing, stale or malformed.
 type integrityError struct{ what string }
@@ -91,6 +95,12 @@ func ReadGate(name string, p Plugin, now time.Time) (*Gate, error) {
 	maxAge := Duration(p.MaxAge, 0)
 	if maxAge <= 0 {
 		return nil, fmt.Errorf("it has no max_age")
+	}
+	// A file dated in the future vouches for a moment that hasn't come: its
+	// age is negative, which would never be over max_age. Clock skew or a
+	// touched file must close the gate, not hold it open for ever.
+	if ahead := g.Fresh.Sub(now); ahead > gateSkew {
+		return nil, fmt.Errorf("its state file is dated %s in the future (clock skew, or a touched file)", ahead.Round(time.Second))
 	}
 	if age := now.Sub(g.Fresh); age > maxAge {
 		return nil, fmt.Errorf("its state file is stale: %s old, max_age %s", age.Round(time.Second), maxAge)

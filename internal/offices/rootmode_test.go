@@ -137,3 +137,25 @@ func TestRootModeSurfacesGetAnEnvironmentBuiltFromNothing(t *testing.T) {
 		t.Fatal("dev mode names its root")
 	}
 }
+
+// The recorder is reached through sudo by every office's user and every
+// owner. It must write only for the office the caller belongs to, or one
+// office's user could forge the audit trail of another.
+func TestTheRecorderTakesOnlyItsOfficesCallers(t *testing.T) {
+	c := &Config{Office: &Office{Name: "region-a-reviews", User: "region-a-reviews", Owner: []string{"alice"}}}
+	for caller, ok := range map[string]bool{
+		"region-a-reviews": true,  // the office's own pull job
+		"alice":            true,  // an owner's open or close
+		"region-a-builder": false, // another office's user
+		"mallory":          false,
+		"":                 true, // not through sudo: the recorder itself, which Whoami already checked
+	} {
+		err := RecorderCallerOK(c, caller)
+		if ok && err != nil {
+			t.Errorf("%q should be taken: %v", caller, err)
+		}
+		if !ok && err == nil {
+			t.Errorf("%q must be refused", caller)
+		}
+	}
+}

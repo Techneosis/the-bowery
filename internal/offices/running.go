@@ -102,10 +102,71 @@ func PutRunning(l Layout, r *Running) error {
 	return WriteAtomic(runningFile(l, r.Office, r.ID), append(b, '\n'), 0o644)
 }
 
+// lockRunning serialises the running records' read-modify-write: the run
+// phase holding or resuming a job, and the job's own `done` and `yielded`.
+// It is held for the write only, never across a surface command.
+func lockRunning(l Layout, office string) (func(), error) {
+	if err := os.MkdirAll(l.VarDir(office), 0o755); err != nil {
+		return nil, err
+	}
+	f, err := os.OpenFile(filepath.Join(l.VarDir(office), "running.lock"), os.O_RDWR|os.O_CREATE, 0o644)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		f.Close()
+		return nil, err
+	}
+	return func() { _ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN); f.Close() }, nil
+}
+
+// PutRunningIfPresent writes a running record only if the job's record is
+// still there: a pass that judged a job for seconds mustn't write a stale
+// copy over a job that ended meanwhile (`office done`), which would bring
+// it back held, blocking new work for a job that no longer exists.
+func PutRunningIfPresent(l Layout, r *Running) (bool, error) {
+	unlock, err := lockRunning(l, r.Office)
+	if err != nil {
+		return false, err
+	}
+	defer unlock()
+	if _, err := os.Stat(runningFile(l, r.Office, r.ID)); err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, PutRunning(l, r)
+}
+
+// UpdateRunning changes a job's record in place, under the lock, from what
+// is there now.
+func UpdateRunning(l Layout, office, id string, f func(*Running) error) error {
+	unlock, err := lockRunning(l, office)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	r, err := GetRunning(l, office, id)
+	if err != nil {
+		return err
+	}
+	if err := f(r); err != nil {
+		return err
+	}
+	return PutRunning(l, r)
+}
+
 // EndRunning removes a job's running record and settles its collapsed
 // run-phase log lines.
 func EndRunning(l Layout, office, id string) error {
-	if err := os.Remove(runningFile(l, office, id)); err != nil && !os.IsNotExist(err) {
+	unlock, err := lockRunning(l, office)
+	if err != nil {
+		return err
+	}
+	err = os.Remove(runningFile(l, office, id))
+	unlock()
+	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
 	st := loadStreaks(l, office)
@@ -279,8 +340,10 @@ func RunPhase(c *Config, ev, accept *Evaluator) ([]RunItem, error) {
 			if mode == "stop-next-turn" {
 				event, r.State = "stopped", "stopping"
 			}
-			if err := PutRunning(c.L, &r); err != nil {
+			if ok, err := PutRunningIfPresent(c.L, &r); err != nil {
 				return nil, err
+			} else if !ok {
+				continue // it ended while it was being judged
 			}
 			code, why := surfaceCmd(c, &r, "hold", map[string]string{"OFFICE_ON_CLOSED": mode, "OFFICE_REASON": res.Reason})
 			e := Entry{"event": event, "job": r.ID, "on_closed": mode, "reason": res.Reason, "by": by, "told": why == ""}
@@ -326,8 +389,10 @@ func RunPhase(c *Config, ev, accept *Evaluator) ([]RunItem, error) {
 		was := r.OnClosed
 		r.State, r.OnClosed, r.Reason, r.By, r.HeldAt, r.Yielded = "running", "", "", "", "", ""
 		r.Resumed++
-		if err := PutRunning(c.L, &r); err != nil {
+		if ok, err := PutRunningIfPresent(c.L, &r); err != nil {
 			return nil, err
+		} else if !ok {
+			continue // it ended while it was being judged
 		}
 		code, why := surfaceCmd(c, &r, "resume", nil)
 		e := Entry{"event": "resumed", "job": r.ID, "was": was, "held_for": heldFor, "by": acc.By, "told": why == ""}

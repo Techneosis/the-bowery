@@ -453,8 +453,13 @@ func cmdJob(cmd string, args []string) {
 		if r.State != "held" {
 			die("%s isn't held (it is %s)", id, r.State)
 		}
-		r.Yielded = offices.Stamp(now())
-		if err := offices.PutRunning(layout, r); err != nil {
+		if err := offices.UpdateRunning(layout, c.Office.Name, id, func(r *offices.Running) error {
+			if r.State != "held" {
+				return fmt.Errorf("%s isn't held (it is %s)", id, r.State)
+			}
+			r.Yielded = offices.Stamp(now())
+			return nil
+		}); err != nil {
 			die("%v", err)
 		}
 		if err := offices.Append(layout, c.Office.Name, offices.Entry{"event": "yielded", "job": id, "on_closed": r.OnClosed,
@@ -475,6 +480,11 @@ func cmdRecord(args []string) {
 	c := load(f.office)
 	if !layout.Dev && (c.Machine.Recorder == "" || offices.Whoami() != c.Machine.Recorder) {
 		die("record runs as the machine file's recorder (%q), not %s", c.Machine.Recorder, offices.Whoami())
+	}
+	if !layout.Dev {
+		if err := offices.RecorderCallerOK(c, os.Getenv("SUDO_USER")); err != nil {
+			die("%v", err)
+		}
 	}
 	b, err := io.ReadAll(io.LimitReader(os.Stdin, 8<<20))
 	if err != nil {
@@ -600,7 +610,15 @@ func cmdPull(args []string) {
 		if due := offices.NextDue(c, rep, time.Now()); !due.IsZero() && due.Before(deadline) {
 			deadline = due
 		}
-		events := c.Events()
+		// What changed while the pass was judging counts: compare against the
+		// fingerprint the pass used, and pass again at once if it moved.
+		events := rep.Events
+		if ctx.Err() != nil {
+			return
+		}
+		if c.Events() != events {
+			continue
+		}
 		wctx, cancel := context.WithDeadline(ctx, deadline)
 		mail := make(chan struct{})
 		go func() {
