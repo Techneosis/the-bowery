@@ -841,5 +841,72 @@ class Review(Pull):
         out, _ = self.place("--kind", "review", "--id", "ra-1", code=4)
         self.assertEqual(out["queued"]["retry_after"], "2099-01-01T10:00:00+02:00")  # 08:00Z
 
+
+class ADeferredProbe(Offices):
+    """In root mode an office's probe judges only for its own user and its
+    owners: anyone else placing into it (another office's user on the same
+    machine) gets "deferred", since its verdicts aren't the office's and the
+    recorder wouldn't take them. Dev mode runs as one user, so a wrapper
+    answers the probe the way a root-mode office answers such a placer. The
+    resolver plans over a deferred office from its catalog, and the office
+    judges the signed placement when it arrives, as itself."""
+
+    def defer_probes(self, *names):
+        wrap = self.lib / "office-defer"
+        cases = " ".join(names)
+        wrap.write_text(textwrap.dedent(f"""\
+            #!/bin/sh
+            if [ "$1" = describe ] && [ "$3" = --probe ]; then
+              for o in {cases}; do
+                if [ "$2" = "$o" ]; then
+                  cat >/dev/null
+                  printf '{{"office":"%s","verdict":"deferred","reason":"placer isn\\x27t its user","retry_after":"","by":"","instances":[]}}\\n' "$2"
+                  exit 0
+                fi
+              done
+            fi
+            exec {OFFICE_BIN} "$@"
+            """))
+        wrap.chmod(0o755)
+        self.write_config(office_command=wrap)
+
+    def test_a_deferred_office_is_placed_into_and_judges_the_job_on_arrival(self):
+        self.write_office(self.REVIEWS, ["review"], ["git"], self.flag_rule())
+        self.set_flag("closed", reason="not yet")
+        self.defer_probes(self.REVIEWS)
+        out, _ = self.place("--kind", "review", "--id", "def-1", code=0)
+        self.assertEqual(out["placed"]["office"], self.REVIEWS)
+        cand = [c for c in self.place_log()[-1]["candidates"] if c["office"] == self.REVIEWS][0]
+        self.assertTrue(cand["deferred"])
+        # The placer judged nothing for the office: no place-phase decision.
+        self.assertEqual([e for e in self.events(self.REVIEWS, "evaluated") if e["phase"] == "place"], [])
+        # The office judges it, as itself, and keeps it while its rule says no.
+        rep = self.pull()
+        self.assertEqual(rep["waiting"], [{"id": "def-1", "reason": "not yet"}])
+        ev = self.events(self.REVIEWS, "evaluated")
+        self.assertEqual([(e["phase"], e["component"], e["job"]) for e in ev], [("accept", "pull", "def-1")])
+        self.set_flag("open")
+        self.pull()
+        self.assertEqual(self.started_ids(), ["def-1"])
+
+    def test_a_deferred_office_its_owner_closed_still_makes_the_job_wait(self):
+        self.office_ok("close", self.REVIEWS)
+        self.defer_probes(self.REVIEWS)
+        out, _ = self.place("--kind", "review", "--id", "def-2", code=4)
+        self.assertIn("closed by its owner", out["queued"]["waiting_for"])
+        self.assertEqual(self.pull()["accepted"], [])
+
+    def test_an_office_that_judged_it_open_goes_before_a_deferred_one(self):
+        # By name the builder would win the tie; it only defers, so the
+        # office that said open takes the job.
+        self.write_office(self.BUILDER, ["review"], ["git"], rules="")
+        self.defer_probes(self.BUILDER)
+        out, _ = self.place("--kind", "review", "--id", "def-4", code=0)
+        self.assertEqual(out["placed"]["office"], self.REVIEWS)
+        self.defer_probes(self.BUILDER, self.REVIEWS)
+        out, _ = self.place("--kind", "review", "--id", "def-5", code=0)
+        self.assertEqual(out["placed"]["office"], self.BUILDER)
+
+
 if __name__ == "__main__":
     unittest.main()

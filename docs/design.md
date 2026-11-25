@@ -547,9 +547,18 @@ doesn't answer;
 filtered on what each office holds (the same `Mismatch` function the office
 uses when it accepts); then a published office-wide `closed`, else a probe
 (`office describe --probe`, the job on stdin), which the office answers by
-running its own place-phase rules. Survivors are ranked (`prefer`,
+running its own place-phase rules. In root mode the probe judges only for
+the office's own user and its owners, because judging means recording the
+office's decisions and the recorder takes them from nobody else. Anyone
+else placing into it (another office's user on the same machine, as a
+signer it trusts) gets `deferred`: nothing is run or written, the resolver
+filters that office on its catalog alone (the owner's state, office-wide
+verdicts), as it does a peer's, and the office judges the signed placement
+when it arrives, at the accept phase, as itself. No one but the office and
+its owners ever writes its record. Survivors are ranked (`prefer`,
 `holds-repo`, `same-machine`, `same-region`, `fewest-running`, then region and
-name). The top one gets the placement, through the transport, and bowery exits
+name), with any office that judged the job open ahead of a deferred one,
+which might yet keep it waiting in its inbox. The top one gets the placement, through the transport, and bowery exits
 0. If none passes but some office was only closed (or didn't answer), the job
 waits in `~/.local/state/bowery/queue/<id>.json` with the whole filter table,
 the asker and the best closed office's owner are told once, and bowery exits
