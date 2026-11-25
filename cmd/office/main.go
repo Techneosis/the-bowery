@@ -956,6 +956,10 @@ func cmdPublish(args []string) {
 		}
 		r := sent{Peer: n, Offices: names}
 		body, err := offices.SignCatalog(doc, key)
+		if err == nil && p.Address == "" {
+			// "" is this region's own to the transport.
+			err = fmt.Errorf("peer %s has no address, so there is nowhere to publish to", n)
+		}
 		if err == nil {
 			err = t.Publish(p.Address, reg.Region, m.Machine, body)
 		}

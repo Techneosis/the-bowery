@@ -3,10 +3,12 @@ package offices
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -165,7 +167,7 @@ func (t *DirTransport) Catalogs(from string) ([]Received, error) {
 			continue
 		}
 		p := filepath.Join(dir, n)
-		b, err := os.ReadFile(p)
+		b, err := readRegular(p)
 		if err != nil {
 			continue
 		}
@@ -280,7 +282,7 @@ func (d *DirInbox) List() ([]Letter, error) {
 			continue
 		}
 		p := filepath.Join(d.Dir, n)
-		b, err := os.ReadFile(p)
+		b, err := readRegular(p)
 		if err != nil {
 			continue
 		}
@@ -294,6 +296,8 @@ func (d *DirInbox) List() ([]Letter, error) {
 	return out, nil
 }
 
+// Done files what was read, not what is at the path now: a letter swapped in
+// after it was verified must not become the accepted (or refused) record.
 func (d *DirInbox) Done(l Letter, to string) error {
 	if to == "" {
 		return os.Remove(l.Path)
@@ -301,13 +305,31 @@ func (d *DirInbox) Done(l Letter, to string) error {
 	if err := os.MkdirAll(to, 0o755); err != nil {
 		return err
 	}
-	dst := filepath.Join(to, filepath.Base(l.Path))
-	if err := os.Rename(l.Path, dst); err != nil {
-		// Another filesystem: copy, then remove.
-		if werr := os.WriteFile(dst, l.Body, 0o644); werr != nil {
-			return werr
-		}
-		return os.Remove(l.Path)
+	if err := WriteAtomic(filepath.Join(to, filepath.Base(l.Path)), l.Body, 0o644); err != nil {
+		return err
 	}
-	return nil
+	return os.Remove(l.Path)
+}
+
+// maxLetter bounds what a box or a catalog directory is read for: a letter or
+// a catalog is a few KiB, and the reader holds a lock.
+const maxLetter = 4 << 20
+
+// readRegular reads a regular file a peer or asker may have written, and
+// nothing else: a FIFO would block the reader for ever, a symlink would read
+// wherever it points, and a huge file would fill memory.
+func readRegular(path string) ([]byte, error) {
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !fi.Mode().IsRegular() || fi.Size() > maxLetter {
+		return nil, fmt.Errorf("%s isn't a regular file of a sane size", path)
+	}
+	return io.ReadAll(io.LimitReader(f, maxLetter+1))
 }

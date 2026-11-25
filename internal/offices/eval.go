@@ -118,7 +118,9 @@ func (e *Evaluator) InstancesFor(job *Job) []Instance {
 	all := e.Instances()
 	if job != nil && job.From != "" && job.From != e.C.Region.Region {
 		if p, ok := e.C.Region.Peers[job.From]; ok {
-			all = append(all, p.Rules...)
+			// The peer's rules run first (spec §5.6): the first closed one
+			// gives the reason and the on_closed.
+			all = append(append([]Instance{}, p.Rules...), all...)
 		}
 	}
 	return all

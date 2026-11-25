@@ -243,6 +243,11 @@ func Pull(c *Config, ev *Evaluator, t Transport, in Inbox, force bool) (*PullRep
 			if !ok {
 				return Append(c.L, o, Entry{"event": "reply-failed", "job": j.ID, "why": "region " + j.From + " isn't a peer: no address to reply to"})
 			}
+			if p.Address == "" {
+				// "" is this region's own to the transport: a reply would
+				// land in a local principal's box.
+				return Append(c.L, o, Entry{"event": "reply-failed", "job": j.ID, "why": "region " + j.From + " has no address: no address to reply to"})
+			}
 			addr = p.Address
 		}
 		if err := t.Reply(addr, j.AskedBy, j.ID, []byte(text)); err != nil {

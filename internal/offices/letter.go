@@ -108,7 +108,7 @@ func parseSigners(path string, lines []string) []Signer {
 		rest := toks[1:]
 		if len(rest) > 0 && !strings.HasPrefix(rest[0], "ssh-") && !strings.HasPrefix(rest[0], "ecdsa-") &&
 			!strings.HasPrefix(rest[0], "sk-") {
-			for _, opt := range strings.Split(rest[0], ",") {
+			for _, opt := range splitOutsideQuotes(rest[0], ',') {
 				k, v, _ := strings.Cut(opt, "=")
 				switch strings.ToLower(k) {
 				case "namespaces":
@@ -136,6 +136,27 @@ func parseSigners(path string, lines []string) []Signer {
 		out = append(out, s)
 	}
 	return out
+}
+
+// splitOutsideQuotes splits on sep, keeping a double-quoted run whole: the
+// commas in namespaces="a,b" belong to the value, not to the option list.
+func splitOutsideQuotes(s string, sep rune) []string {
+	var out []string
+	var cur strings.Builder
+	inQ := false
+	for _, r := range s {
+		switch {
+		case r == '"':
+			inQ = !inQ
+			cur.WriteRune(r)
+		case r == sep && !inQ:
+			out = append(out, cur.String())
+			cur.Reset()
+		default:
+			cur.WriteRune(r)
+		}
+	}
+	return append(out, cur.String())
 }
 
 // splitQuoted splits on blanks, keeping a double-quoted run whole.

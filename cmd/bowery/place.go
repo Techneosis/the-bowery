@@ -563,6 +563,13 @@ func peerCandidates(t offices.Transport, reg *offices.Region, regions []string, 
 			continue
 		}
 		p := reg.Peers[name]
+		if p.Address == "" {
+			// "" is this region's own to the transport: a placement would
+			// land in one of this region's boxes.
+			out = append(out, &Candidate{Office: "*", Region: name, Class: "unreachable",
+				Reason: "region " + name + " has no address: nothing can be sent there"})
+			continue
+		}
 		recs, err := t.Catalogs(name)
 		if err != nil || len(recs) == 0 {
 			why := "no catalog from region " + name + " yet"

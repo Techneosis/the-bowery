@@ -482,5 +482,33 @@ class Clocks(Regions):
         self.assertEqual(self.started_ids(), [])
 
 
+@unittest.skipUnless(_keys.have_ssh_keygen(), "needs ssh-keygen")
+class APeerWithNoAddress(Regions):
+    """An empty address means "this region's own" to the transport, so a peer
+    entry without one must never be sent to, or replied to: its asker's
+    refusal would land in a local principal's box, and its offices' placements
+    in this region's own boxes."""
+
+    def write_region(self, extra=None):
+        if not hasattr(self, "b_root"):
+            return super().write_region("")
+        super().write_region(self.peer_entry().replace(f'address   = "{self.b_root / "var"}"', 'address   = ""'))
+
+    def test_a_refusal_is_not_filed_in_a_local_askers_box(self):
+        self.drop_letter("na-1", self.peer_letter("na-1", office=self.BUILDER, kind="builder"), office=self.BUILDER)
+        self.write_signers(self.BUILDER)
+        rep = self.pull(self.BUILDER)
+        self.assertEqual([r["id"] for r in rep["refused"]], ["na-1"])
+        self.assertEqual(list((self.a_var / "boxes").glob("asker-*/*.reply")), [])
+        failed = self.events(self.BUILDER, "reply-failed")
+        self.assertIn("no address", failed[0]["why"])
+
+    def test_a_catalog_is_not_published_to_it(self):
+        r = self.office("publish", "--json")
+        self.assertEqual(r.returncode, 1, r.stderr)
+        self.assertIn("no address", json.loads(r.stdout)[0]["error"])
+        self.assertFalse((self.a_var / "catalogs").exists())
+
+
 if __name__ == "__main__":
     unittest.main()
