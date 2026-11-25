@@ -82,7 +82,7 @@ _office() {
     cur=${COMP_WORDS[COMP_CWORD]}
     prev=${COMP_WORDS[COMP_CWORD-1]}
     if ((COMP_CWORD == 1)); then
-        COMPREPLY=($(compgen -W "ls describe open close clear stop done yielded pull log record check publish version" -- "$cur"))
+        COMPREPLY=($(compgen -W "ls describe open close clear stop done yielded pull log record check publish serve version" -- "$cur"))
         return
     fi
     case $prev in
@@ -97,10 +97,11 @@ _office() {
             pull) COMPREPLY=($(compgen -W "--json --loop --interval --backstop --for" -- "$cur")) ;;
             log) COMPREPLY=($(compgen -W "--since --json" -- "$cur")) ;;
             publish) COMPREPLY=($(compgen -W "--valid --json" -- "$cur")) ;;
+            serve) COMPREPLY=($(compgen -W "--listen" -- "$cur")) ;;
         esac
         return
     fi
-    if ((COMP_CWORD == 2)) && [[ $sub != ls && $sub != publish && $sub != version ]]; then
+    if ((COMP_CWORD == 2)) && [[ $sub != ls && $sub != publish && $sub != serve && $sub != version ]]; then
         root=${OFFICE_ROOT:+$OFFICE_ROOT/etc}
         root=${root:-/usr/local/etc/offices}
         COMPREPLY=($(compgen -W "$(for d in "$root"/*/; do [[ -f $d/office.toml ]] && basename "$d"; done 2>/dev/null)" -- "$cur"))

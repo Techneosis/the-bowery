@@ -88,3 +88,7 @@ func Whoami() string {
 	}
 	return os.Getenv("USER")
 }
+
+// Published is where `office publish` keeps the catalogs this machine's
+// endpoint serves to peer (the http transport: the peer fetches them).
+func (l Layout) Published(peer string) string { return filepath.Join(l.Var, "published", peer) }

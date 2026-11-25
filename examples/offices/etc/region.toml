@@ -25,7 +25,8 @@ retry_tick   = "10m"         # how often a waiting placement is judged again wit
 
 # A peer region (both files must declare each other). What it may do *here*:
 # the offices it may place into, and rules every placement from it must also
-# pass. address is the transport's: for "dir", the peer's var directory.
+# pass. address is the transport's: for "dir", the peer's var directory; for
+# "http", the URL of its machine's office serve (https://box-2.example.net:8470).
 [peers.region-b]
 address   = "/var/lib/offices-region-b"
 key       = "ssh-ed25519 AAAA… region-b"   # pinned: a seal or catalog by any other key is no link

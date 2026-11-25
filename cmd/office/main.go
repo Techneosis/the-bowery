@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"os/user"
@@ -52,6 +54,9 @@ const usage = `office: the office host. Opens and closes offices, judges placeme
                                            signers, peers
   office publish [--valid 10m] [--json]    publish this machine's catalog to each peer: only the
                                            offices its may_place grants, signed with the region key
+  office serve [--listen HOST:PORT]        the http transport's endpoint for this machine's offices:
+                                           POST /placements/<box>, POST /replies/<asker>?id=<id>,
+                                           GET /catalog/<peer>; binds the machine file's listen
   office version
 
 --until takes an RFC 3339 time or a duration from now (90m, 24h).
@@ -119,6 +124,8 @@ func main() {
 		cmdCheck(rest)
 	case "publish":
 		cmdPublish(rest)
+	case "serve":
+		cmdServe(rest)
 	default:
 		die("unknown command %s (office --help)", cmd)
 	}
@@ -822,7 +829,14 @@ func cmdCheck(args []string) {
 		}
 		if p.Address == "" {
 			probs = append(probs, fmt.Sprintf("peer %s: no address, so its askers can't be answered", name))
+		} else if c.Machine.Transport == "http" {
+			if _, err := offices.ParseAddress(p.Address); err != nil {
+				probs = append(probs, fmt.Sprintf("peer %s: %v, so its askers can't be answered", name, err))
+			}
 		}
+	}
+	if c.Machine.Transport == "http" && c.Machine.Listen == "" {
+		probs = append(probs, "the machine file's transport is http and it has no listen, so office serve has nowhere to bind")
 	}
 	if c.Machine.RegionKey != "" {
 		k, err := offices.LoadPrivateKey(expandHome(c.Machine.RegionKey))
@@ -867,6 +881,60 @@ func containsInt(xs []int, x int) bool {
 		}
 	}
 	return false
+}
+
+// ---------------------------------------------------------------- serve
+
+// cmdServe runs the http transport's endpoint for this machine (spec §10):
+// placements and replies are stored in the on-disk boxes, where the pull
+// job's directory watch wakes it at once, and catalogs `office publish`
+// kept are served to the peers they were published for. It checks shape,
+// never identity: the office judges everything it stores.
+func cmdServe(args []string) {
+	f := parse(args, []string{"--listen"}, nil)
+	if f.office != "" {
+		die("serve takes no office: it serves every office on this machine")
+	}
+	m, err := offices.LoadMachine(layout)
+	if err != nil {
+		die("%v", err)
+	}
+	if _, err := offices.LoadRegion(layout); err != nil {
+		die("%v", err)
+	}
+	if here := offices.ThisMachine(); m.Machine != here {
+		die("%s says machine %q, and this is %q", layout.MachineFile(), m.Machine, here)
+	}
+	if !layout.Dev && os.Geteuid() == 0 {
+		die("serve doesn't run as root: give it its own user, with write access to the boxes (the install doc)")
+	}
+	addr := m.Listen
+	if v, ok := f.vals["--listen"]; ok {
+		addr = v
+	}
+	if addr == "" {
+		die("no address to listen on: set listen in %s, or pass --listen HOST:PORT", layout.MachineFile())
+	}
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		die("%v", err)
+	}
+	srv := offices.NewHTTPServer(addr, &offices.Server{L: layout, Log: func(format string, a ...any) {
+		fmt.Fprintf(os.Stderr, "office serve: "+format+"\n", a...)
+	}})
+	// The bound address, for a caller that asked for port 0.
+	fmt.Printf("listening on http://%s\n", ln.Addr())
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	go func() {
+		<-ctx.Done()
+		sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(sctx)
+	}()
+	if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		die("%v", err)
+	}
 }
 
 // ---------------------------------------------------------------- publish
@@ -961,7 +1029,7 @@ func cmdPublish(args []string) {
 			err = fmt.Errorf("peer %s has no address, so there is nowhere to publish to", n)
 		}
 		if err == nil {
-			err = t.Publish(p.Address, reg.Region, m.Machine, body)
+			err = t.Publish(n, p.Address, reg.Region, m.Machine, body)
 		}
 		if err != nil {
 			r.Error, failed = err.Error(), true

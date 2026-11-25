@@ -55,7 +55,8 @@ identity_env = "BOWERY_AS"
 # prefer = ["region:region-a"]
 # A job of this scope is never placed outside these regions.
 # never = [{ scope = "acme", outside = ["region-a"] }]
-# The placement transport, by name; the offices' machine files name the same.
+# The placement transport, by name; the offices' machine files name the same:
+# "dir" (boxes are directories) or "http" (a peer's address is its URL).
 # transport = "dir"
 # The office host to ask. Default: office, on PATH.
 # office_command = "office"

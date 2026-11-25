@@ -245,6 +245,17 @@ district that has struck the other's entry from its file: the letter is
 refused, and work already started under it is asked to yield, as if its
 door had shut. Striking the entry is the whole of revoking.
 
+**The post between districts** goes one of two ways. By **courier** (`dir`),
+letters are slipped into the other district's letterboxes directly, for
+districts that share a building (one machine, or a shared disk). By **wire**
+(`http`), each machine keeps a **front desk** (`office serve`): a letter
+handed over the desk goes straight into the office's letterbox, and the
+office, sitting by it, has it in hand within milliseconds. The desk keeps the
+signed list it posts each district, for that district to collect, and hands
+over nothing else. It looks at a letter only to see that it is one (its size,
+its envelope, the box it's for); whether to trust it is the office's call, by
+the signatures, as always.
+
 ```
 bowery place --kind review --needs tools=git -- "review PR 12"   # 0 placed, 4 waiting, 3 refused, 1 error
 bowery dispatch rev --job-kind review --office region-a-reviews -- "review PR 12"
@@ -258,6 +269,7 @@ office log region-a-reviews --since 1h      # the daybook and the decisions book
 office check region-a-reviews               # is the office fit to open: plugins, pins, signers, peers
 bowery queue                                # who is on the waiting bench, and for whom
 office publish                              # post each peer district its signed list
+office serve                                # the front desk: letters by wire, lists collected
 bowery peers                                # what the other districts post to us
 ```
 

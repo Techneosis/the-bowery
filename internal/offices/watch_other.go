@@ -1,4 +1,4 @@
-//go:build !linux
+//go:build !linux && !darwin
 
 package offices
 
@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// dirWatch has no native implementation off Linux: the directory inbox
+// dirWatch has no native implementation off Linux and macOS: the directory inbox
 // polls instead.
 type dirWatch struct{}
 

@@ -155,6 +155,11 @@ class Regions(Offices):
         p = self.b_state / "place.log"
         return [json.loads(l) for l in p.read_text().splitlines()] if p.exists() else []
 
+    def catalog_path(self):
+        """Where region-a's catalog for region-b is kept: pushed into
+        region-b's var by the dir transport."""
+        return self.b_root / "var" / "catalogs" / "region-a" / f"{HOST}.catalog"
+
     def b_replies(self, who="bob"):
         d = self.b_root / "var" / "boxes" / f"asker-{who}"
         return {p.stem: p.read_text() for p in d.glob("*.reply")} if d.exists() else {}
@@ -326,7 +331,7 @@ class Catalogs(Regions):
         pinned = [c for c in out["unplaceable"]["candidates"] if c["office"] == self.BUILDER][0]
         self.assertEqual(pinned["reason"], "not an office this bowery knows")
         # What a peer sees carries nothing about other jobs, nor local paths.
-        body = (self.b_root / "var" / "catalogs" / "region-a" / f"{HOST}.catalog").read_text()
+        body = self.catalog_path().read_text()
         doc = json.loads(body.split("\n")[1])
         self.assertEqual(doc["for"], "region-b")
         self.assertEqual(doc["offices"][0]["box_path"], "")
@@ -334,7 +339,7 @@ class Catalogs(Regions):
 
     def test_a_tampered_catalog_is_no_link(self):
         self.publish()
-        p = self.b_root / "var" / "catalogs" / "region-a" / f"{HOST}.catalog"
+        p = self.catalog_path()
         p.write_text(p.read_text().replace('"kinds":["review"]', '"kinds":["review","builder"]'))
         peers = json.loads(self.b_bowery("peers", "--json").stdout)
         self.assertEqual(peers[0]["offices"], [])

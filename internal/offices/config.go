@@ -158,6 +158,10 @@ type Machine struct {
 	Machine string `toml:"machine"`
 	// Transport is the placement transport's name (default "dir").
 	Transport string `toml:"transport"`
+	// Listen is where `office serve` binds the http transport's endpoint
+	// (host:port). Bind it to loopback or a private interface and put the
+	// network's own front (a tailnet's serve, a reverse proxy) before it.
+	Listen string `toml:"listen"`
 	// Recorder is the user that writes the decisions logs in root mode.
 	Recorder string `toml:"recorder"`
 	// RegionKey is the region's private key on this machine: what `office

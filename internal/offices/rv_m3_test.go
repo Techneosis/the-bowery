@@ -58,7 +58,7 @@ func TestCatalogsIgnoreAFifo(t *testing.T) {
 		t.Skip("no mkfifo")
 	}
 	done := make(chan struct{})
-	go func() { _, _ = (&DirTransport{L: l}).Catalogs("region-b"); close(done) }()
+	go func() { _, _ = (&DirTransport{L: l}).Catalogs("region-b", "", ""); close(done) }()
 	select {
 	case <-done:
 	case <-time.After(3 * time.Second):

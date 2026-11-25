@@ -2,6 +2,7 @@ package offices
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -49,11 +50,12 @@ type Transport interface {
 	// Inbox opens a box of this region's for its office's pull job.
 	Inbox(box string) Inbox
 	// Publish delivers region from's catalog of one machine's offices to
-	// the peer at addr, replacing the one it sent before.
-	Publish(addr, from, machine string, body []byte) error
-	// Catalogs are the catalogs region from has published to this region,
-	// one per machine.
-	Catalogs(from string) ([]Received, error)
+	// peer (reached at addr), replacing the one it sent before. A transport
+	// may push it (dir) or keep it for the peer to fetch (http).
+	Publish(peer, addr, from, machine string, body []byte) error
+	// Catalogs are the catalogs region from (reached at addr) has published
+	// to region self, one per machine.
+	Catalogs(from, addr, self string) ([]Received, error)
 }
 
 // Inbox is one office's side of the transport. The pull loop calls Wait,
@@ -70,14 +72,16 @@ type Inbox interface {
 }
 
 // NewTransport picks a transport by name (the machine file's and bowery's
-// `transport`). "" and "dir" are the directory transport; another name is
-// an adapter this build doesn't have.
+// `transport`). "" and "dir" are the directory transport, "http" the HTTP
+// one; another name is an adapter this build doesn't have.
 func NewTransport(kind string, l Layout, poll time.Duration) (Transport, error) {
 	switch kind {
 	case "", "dir":
 		return &DirTransport{L: l, Poll: poll}, nil
+	case "http":
+		return NewHTTPTransport(l, poll), nil
 	}
-	return nil, fmt.Errorf("transport %q isn't built into this binary (this one has: dir)", kind)
+	return nil, fmt.Errorf("transport %q isn't built into this binary (this one has: dir, http)", kind)
 }
 
 // DirTransport is the built-in transport: a box is a directory under the
@@ -133,7 +137,7 @@ func (t *DirTransport) Reply(addr, asker, id string, body []byte) error {
 	return dropFile(filepath.Join(v, "boxes", "asker-"+asker), id+".reply", body)
 }
 
-func (t *DirTransport) Publish(addr, from, machine string, body []byte) error {
+func (t *DirTransport) Publish(_, addr, from, machine string, body []byte) error {
 	v, err := t.at(addr)
 	if err != nil {
 		return err
@@ -148,11 +152,15 @@ func (t *DirTransport) Publish(addr, from, machine string, body []byte) error {
 	return WriteAtomic(filepath.Join(dir, machine+".catalog"), body, 0o644)
 }
 
-func (t *DirTransport) Catalogs(from string) ([]Received, error) {
+func (t *DirTransport) Catalogs(from, _, _ string) ([]Received, error) {
 	if !NameRE.MatchString(from) {
 		return nil, fmt.Errorf("%q isn't a region name", from)
 	}
-	dir := filepath.Join(t.L.Var, "catalogs", from)
+	return readCatalogDir(filepath.Join(t.L.Var, "catalogs", from))
+}
+
+// readCatalogDir reads every <machine>.catalog in dir, by machine.
+func readCatalogDir(dir string) ([]Received, error) {
 	ents, err := os.ReadDir(dir)
 	if os.IsNotExist(err) {
 		return nil, nil
@@ -196,10 +204,13 @@ func dropFile(dir, name string, body []byte) error {
 	}
 	dst := filepath.Join(dir, name)
 	if _, err := os.Stat(dst); err == nil {
-		return fmt.Errorf("%s is already in the box", name)
+		return ErrInBox
 	}
 	return WriteAtomic(dst, body, 0o644)
 }
+
+// ErrInBox is a letter whose id is already waiting in the box.
+var ErrInBox = errors.New("a letter with that id is already in the box")
 
 // DirInbox is a directory box, polled.
 type DirInbox struct {

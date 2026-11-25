@@ -570,7 +570,7 @@ func peerCandidates(t offices.Transport, reg *offices.Region, regions []string, 
 				Reason: "region " + name + " has no address: nothing can be sent there"})
 			continue
 		}
-		recs, err := t.Catalogs(name)
+		recs, err := t.Catalogs(name, p.Address, reg.Region)
 		if err != nil || len(recs) == 0 {
 			why := "no catalog from region " + name + " yet"
 			if err != nil {

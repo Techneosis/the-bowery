@@ -1,6 +1,8 @@
 # The machine file: /usr/local/etc/offices/machine.toml (root:root 0644).
 machine   = "box-1"          # the office host runs only on the machine it names
-transport = "dir"            # the placement transport: boxes are directories under var/boxes
+transport = "dir"            # the placement transport: boxes are directories under var/boxes;
+                             # "http" also takes letters over HTTP, from office serve
+# listen  = "127.0.0.1:8470" # http: where office serve binds (put the network's own front before it)
 recorder  = "offices-rec"    # root mode: the user that writes the decisions logs (via sudo)
 # region_key = "/usr/local/etc/offices/keys/region"   # the region's private key: office publish signs catalogs with it
 

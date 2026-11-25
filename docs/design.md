@@ -574,7 +574,8 @@ interface (send to a box at an address, wait on a box, reply to an asker at
 an address, publish a catalog to a peer, read the catalogs peers sent),
 picked by name in the machine file and bowery's config; the built-in one,
 `dir`, makes each box a directory under `var/boxes/` and takes another
-region's var directory as an address. Nothing else knows how letters travel.
+region's var directory as an address; `http` (below) takes a URL. Nothing
+else knows how letters travel.
 An empty address is this region's own, so a peer with none is never sent
 to, published to or replied to: the resolver marks it unreachable, `office
 publish` reports it, and a reply is logged `reply-failed`. A box or catalog
@@ -700,12 +701,47 @@ is killed. In root mode its environment is built from nothing: a fixed
 `OFFICE_ROOT` or anything else.
 
 **The long-poll.** `office pull --loop` blocks in the transport's
-`Inbox.Wait` until mail lands (the `dir` transport waits on an inotify
-watch of the box on Linux and polls every `--interval` elsewhere), while
+`Inbox.Wait` until mail lands (both built-in transports wait on a watch of
+the box's directory: inotify on Linux, kqueue on macOS; they poll every
+`--interval` elsewhere), while
 checking the event fingerprint (the owner's state, the config files, the
 gate files, running work and requests) every `--interval`. It wakes for
 whichever comes first, or for a waiting placement's retry, an owner's
 `until`, or the run interval, and never sleeps past `--backstop`.
+
+**The http transport.** For regions on different machines. Each machine runs
+`office serve`, bound to the machine file's `listen` (`host:port`: loopback
+or a private interface, with the network's own front before it, such as a
+tailnet's serve or a reverse proxy; it never runs as root). It serves three
+paths and nothing else, and never lists anything:
+
+| request | what it does |
+|---|---|
+| `POST /placements/<box>` | stores the letter as `<id>.placement` in the box of an office on this machine (the box is matched against the region file's offices for this machine; anything else is 404). The id comes from the letter, which must decode as a placement (400 if not); an id already in the box is 409; a box already holding 256 is 503 |
+| `POST /replies/<asker>?id=<id>` | stores a reply as `<id>.reply` in `asker-<asker>` |
+| `GET /catalog/<peer>` | the catalog `office publish` kept for that peer (under `var/published/<peer>/`), with the machine in `X-Office-Machine`; 404 if there is none |
+
+A body is `text/plain` (charset utf-8 or none), at most 64 KiB for a
+placement and 4 KiB for a reply (413 past it, counted while reading, so a
+chunked body can't get past it either). A name is one path segment: an
+escaped `/` or `..` is never a name. The endpoint stores into the same
+on-disk boxes the `dir` transport uses, so the pull job is unchanged, and the
+box's directory watch wakes it the moment the file is renamed into place: a
+POST to `delivered` is a millisecond or two on one machine. It checks shape,
+not identity: a letter is still trusted only for its signatures, which the
+office checks when it pulls, so a forged one is stored and then dropped like
+any other.
+
+The client side: a peer's `address` is the URL of its machine's endpoint
+(`http://` or `https://`, a host, no user, query or fragment; a path is a
+prefix). `Send` and `Reply` POST with a 5 s timeout, three tries on a network
+error or a 5xx (a 409 after a lost answer is the earlier try's letter, so
+success), and never follow a redirect. `office publish` keeps each peer's
+catalog locally for the endpoint to serve; bowery's resolver GETs the one
+kept for its region. This region's own address (`""`) is the local boxes, as
+for `dir`. One URL is one machine, so a peer region reached by http is one
+machine for now. `office check` reports a peer address that isn't a URL, and
+an http machine file without `listen`.
 
 ### Regions and peering
 
