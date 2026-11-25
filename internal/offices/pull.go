@@ -197,11 +197,13 @@ func Pull(c *Config, ev *Evaluator, t Transport, in Inbox, force bool) (*PullRep
 			}
 			continue
 		}
-		if max := c.Region.MaxExpires; max != "" && j.SignedAt != "" {
-			sa, _ := time.Parse(time.RFC3339Nano, j.SignedAt)
+		if max := c.Region.MaxExpires; max != "" {
+			// Counted from the signing time. A placement with none can't be
+			// bounded, so it is refused rather than let through.
+			sa, serr := time.Parse(time.RFC3339Nano, j.SignedAt)
 			exp, _ := time.Parse(time.RFC3339Nano, j.Expires)
-			if exp.Sub(sa) > Duration(max, 24*time.Hour) {
-				if err := refuse("expires is past the region's max_expires"); err != nil {
+			if serr != nil || exp.Sub(sa) > Duration(max, 24*time.Hour) {
+				if err := refuse("expires is past the region's max_expires, or the placement has no signing time"); err != nil {
 					return nil, err
 				}
 				continue

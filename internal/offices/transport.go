@@ -70,6 +70,10 @@ func (t *DirTransport) Send(box, id string, body []byte) error {
 }
 
 func (t *DirTransport) Reply(asker, id string, body []byte) error {
+	// An asker names a box, never a path out of the boxes.
+	if asker == "" || strings.ContainsAny(asker, "/\\") || strings.Contains(asker, "..") {
+		return fmt.Errorf("asker %q isn't a box name", asker)
+	}
 	return dropFile(t.L.BoxDir("asker-"+asker), id+".reply", body)
 }
 

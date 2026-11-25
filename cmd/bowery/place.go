@@ -400,9 +400,12 @@ func resolve(j *offices.Job, reg *offices.Region) *Decision {
 			c.Class, c.Reason = "holdings", strings.Join(why, "; ")
 			continue
 		}
-		// A published office-wide closed verdict needs no probe.
+		// A published office-wide closed verdict needs no probe, unless the
+		// owner's override speaks to this job: an open beats a rule, and only
+		// the office knows whether the rule is binding. The probe says.
+		ownerSpeaks := cat.State != nil && cat.State.Applies(j, time.Now())
 		for _, p := range cat.Verdicts {
-			if p.Verdict == "closed" {
+			if p.Verdict == "closed" && !ownerSpeaks {
 				c.Class, c.Reason, c.RetryAfter = "closed", p.Reason, p.RetryAfter
 				break
 			}
@@ -450,7 +453,7 @@ func resolve(j *offices.Job, reg *offices.Region) *Decision {
 				d.RetryAfter = ""
 				break
 			}
-			if d.RetryAfter == "" || c.RetryAfter < d.RetryAfter {
+			if d.RetryAfter == "" || offices.Earlier(c.RetryAfter, d.RetryAfter) {
 				d.RetryAfter = c.RetryAfter
 			}
 		}
@@ -640,7 +643,9 @@ func placeJob(j *offices.Job, reg *offices.Region) outcome {
 	if d.Waiting == nil {
 		reachable := false
 		for _, c := range filter {
-			reachable = reachable || (c.Class == "unreachable" && c.cat == nil && !strings.HasPrefix(c.Reason, "on machine"))
+			// An office that holds what the job needs but isn't answering
+			// (its describe or its probe) is a wait, not a setup gap.
+			reachable = reachable || (c.Class == "unreachable" && !strings.HasPrefix(c.Reason, "on machine"))
 		}
 		if !reachable {
 			gap := "no office holds what " + j.ID + " needs"
@@ -766,7 +771,7 @@ func cmdPlaceRetry() {
 			placed = append(placed, o.line["placed"])
 		case exitQueued:
 			waiting = append(waiting, o.line["queued"])
-			if r := readQueued(j.ID); r != nil && r.RetryAfter != "" && (next == "" || r.RetryAfter < next) {
+			if r := readQueued(j.ID); r != nil && r.RetryAfter != "" && (next == "" || offices.Earlier(r.RetryAfter, next)) {
 				next = r.RetryAfter
 			}
 		default:

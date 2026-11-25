@@ -70,6 +70,9 @@ func (j *Job) Validate() error {
 	if j.AskedBy == "" {
 		return fmt.Errorf("a job needs asked_by")
 	}
+	if strings.Contains(j.AskedBy, "/") {
+		return fmt.Errorf("asked_by %q: a principal's name has no slash", j.AskedBy)
+	}
 	single := map[string]string{"kind": j.Kind, "asked_by": j.AskedBy, "scope": j.Scope, "area": j.Area,
 		"priority": j.Priority, "surface": j.Surface, "profile": j.Profile, "repo": j.Repo, "branch": j.Branch,
 		"base": j.Base, "office": j.Office, "machine": j.Machine, "region": j.Region, "name": j.Name,

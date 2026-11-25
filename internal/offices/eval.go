@@ -210,6 +210,14 @@ func combine(res *Result, def string) {
 	}
 }
 
+// Earlier says whether RFC 3339 time a is before b, whatever offsets they
+// are written in. A time that doesn't parse is never earlier.
+func Earlier(a, b string) bool {
+	ta, e1 := time.Parse(time.RFC3339Nano, a)
+	tb, e2 := time.Parse(time.RFC3339Nano, b)
+	return e1 == nil && e2 == nil && ta.Before(tb)
+}
+
 func later(a, b string) bool {
 	ta, _ := time.Parse(time.RFC3339Nano, a)
 	tb, _ := time.Parse(time.RFC3339Nano, b)

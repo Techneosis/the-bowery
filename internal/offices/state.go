@@ -35,6 +35,12 @@ func ReadState(l Layout, office string) (*State, error) {
 	if s.State != "open" && s.State != "closed" {
 		return nil, fmt.Errorf("%s: state must be open or closed", l.StateFile(office))
 	}
+	// An until that can't be read would never expire; the caller closes.
+	if s.Until != "" {
+		if _, err := time.Parse(time.RFC3339, s.Until); err != nil {
+			return nil, fmt.Errorf("%s: until %q isn't RFC 3339", l.StateFile(office), s.Until)
+		}
+	}
 	return s, nil
 }
 

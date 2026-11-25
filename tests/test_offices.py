@@ -651,6 +651,7 @@ class Pull(Offices):
 
     def letter(self, **kw):
         fields = {"id": "x1", "kind": "review", "asked_by": "alice", "expires": "2099-01-01T00:00:00Z",
+                  "signed_at": "2098-12-31T12:00:00Z",
                   "office": self.REVIEWS, "machine": HOST, "region": "region-a"}
         fields.update(kw)
         lines = "".join(f'{k} = {json.dumps(v)}\n' for k, v in sorted(fields.items()))
@@ -767,6 +768,59 @@ class Hours(unittest.TestCase):
         code, v = self.ask("2026-01-05T10:00:00Z", ["Someday 09:00-17:00"])
         self.assertNotEqual(code, 0)
 
+
+class Review(Pull):
+    """Found in review of offices-m1: each of these failed before its fix."""
+
+    def test_a_placement_with_no_signing_time_can_not_dodge_max_expires(self):
+        body = self.letter(id="nosign").replace('signed_at = "2098-12-31T12:00:00Z"\n', "")
+        self.assertNotIn("signed_at", body)
+        self.drop("nosign", body)
+        rep = self.pull()
+        self.assertEqual(rep["accepted"], [])
+        self.assertEqual([r["id"] for r in rep["refused"]], ["nosign"])
+        self.assertEqual(self.started_ids(), [])
+
+    def test_an_asker_name_can_not_steer_a_reply_out_of_the_boxes(self):
+        self.drop("esc", self.letter(id="esc", asked_by="a/../../pwn", office=self.BUILDER))
+        self.pull()
+        self.assertFalse((self.var / "pwn").exists())
+        self.assertFalse(list(self.var.rglob("esc.reply")))
+
+    def test_an_owner_open_beats_a_published_closed_verdict(self):
+        self.write_office(self.REVIEWS, ["review"], ["git"], self.flag_rule())
+        self.set_flag("closed", reason="rule says no", holds="office", valid_until="2099-01-01T00:00:00Z")
+        self.place("--kind", "review", "--id", "pub-1", code=4)
+        self.assertEqual(json.loads(self.office_ok("describe", self.REVIEWS, "--json"))["verdicts"][0]["verdict"], "closed")
+        self.office_ok("open", self.REVIEWS)
+        out, _ = self.place("--kind", "review", "--id", "pub-2", code=0)
+        self.assertEqual(out["placed"]["office"], self.REVIEWS)
+
+    def test_an_office_that_stops_answering_its_probe_makes_the_job_wait(self):
+        wrap = self.lib / "office-wrap"
+        wrap.write_text(f"#!/bin/sh\n[ \"$3\" = --probe ] && exit 1\nexec {OFFICE_BIN} \"$@\"\n")
+        wrap.chmod(0o755)
+        self.config.write_text(f'[placement]\noffice_command = "{wrap}"\n')
+        out, _ = self.place("--kind", "review", "--id", "mute-1", code=4)
+        self.assertIn("queued", out)
+        self.assertTrue((self.state / "queue" / "mute-1.json").exists())
+
+    def test_a_state_file_with_a_bad_until_closes_rather_than_never_expiring(self):
+        d = self.var / self.REVIEWS
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "state").write_text(json.dumps({"state": "open", "until": "tomorrow", "by": "alice", "at": "2026-01-01T00:00:00Z"}))
+        res = self.probe(self.REVIEWS, self.job())
+        self.assertEqual(res["verdict"], "closed")
+        self.assertIn("state", res["reason"])
+
+    def test_the_earliest_retry_is_the_earliest_in_time_not_in_text(self):
+        for name, f, ra in ((self.REVIEWS, self.t / "f1.json", "2099-01-01T10:00:00+02:00"),
+                            (self.BUILDER, self.t / "f2.json", "2099-01-01T09:00:00Z")):
+            f.write_text(json.dumps({"verdict": "closed", "reason": "later", "retry_after": ra}))
+            rule = f'\n[[rules.use]]\nname = "flag"\nplugin = "flag"\n[rules.use.config]\nfile = "{f}"\n'
+            self.write_office(name, ["review"], ["git"], rule)
+        out, _ = self.place("--kind", "review", "--id", "ra-1", code=4)
+        self.assertEqual(out["queued"]["retry_after"], "2099-01-01T10:00:00+02:00")  # 08:00Z
 
 if __name__ == "__main__":
     unittest.main()
