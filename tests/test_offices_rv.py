@@ -21,6 +21,7 @@ import time
 import unittest
 from datetime import datetime, timedelta, timezone
 
+import _keys
 from _binary import OFFICE_BIN
 from test_offices import HOST, sha
 from test_offices_run import Run, iso
@@ -30,7 +31,8 @@ class Drops:
     def drop(self, id):
         fields = {"id": id, "kind": "review", "asked_by": "alice", "expires": "2099-01-01T00:00:00Z",
                   "signed_at": "2098-12-31T12:00:00Z", "office": self.REVIEWS, "machine": HOST, "region": "region-a"}
-        body = "```placement\n" + "".join(f"{k} = {json.dumps(v)}\n" for k, v in sorted(fields.items())) + "```\n"
+        block = "```placement\n" + "".join(f"{k} = {json.dumps(v)}\n" for k, v in sorted(fields.items())) + "```\n"
+        body = _keys.letter(block, requester="alice")  # unsigned, it would be dropped before anything is judged
         box = self.var / "boxes" / ("office-" + self.REVIEWS)
         box.mkdir(parents=True, exist_ok=True)
         tmp = box / f".{id}.tmp"

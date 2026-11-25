@@ -159,11 +159,16 @@ type Machine struct {
 	// Transport is the placement transport's name (default "dir").
 	Transport string `toml:"transport"`
 	// Recorder is the user that writes the decisions logs in root mode.
-	Recorder string                  `toml:"recorder"`
-	Plugins  map[string]Plugin       `toml:"plugins"`
-	Facts    map[string]FactProvider `toml:"facts"`
-	Rules    []Instance              `toml:"rules"`
-	Surfaces map[string]Surface      `toml:"surfaces"`
+	Recorder string `toml:"recorder"`
+	// RegionKey is the region's private key on this machine: what `office
+	// publish` signs this machine's catalogs for the region's peers with
+	// (spec open question 2: where the region key lives). Readable by its
+	// owner alone; its public half must be the region file's key.
+	RegionKey string                  `toml:"region_key"`
+	Plugins   map[string]Plugin       `toml:"plugins"`
+	Facts     map[string]FactProvider `toml:"facts"`
+	Rules     []Instance              `toml:"rules"`
+	Surfaces  map[string]Surface      `toml:"surfaces"`
 }
 
 // ---------------------------------------------------------------- office
@@ -203,6 +208,7 @@ type Office struct {
 	// The lists the record names, read from beside office.toml.
 	RepoList    []RepoHolding `toml:"-"`
 	SignerNames []string      `toml:"-"`
+	SignerList  []Signer      `toml:"-"`
 	AuthorList  []string      `toml:"-"`
 }
 
@@ -301,6 +307,18 @@ func LoadRegion(l Layout) (*Region, error) {
 	}
 	if err := checkOnClosed(l.RegionFile(), "defaults.on_closed", r.Defaults.OnClosed); err != nil {
 		return nil, err
+	}
+	for name, p := range r.Peers {
+		if !NameRE.MatchString(name) || name == r.Region {
+			return nil, fmt.Errorf("%s: peers.%s: not a region name, or this region's own", l.RegionFile(), name)
+		}
+		for i := range p.Rules {
+			p.Rules[i].source = "peer"
+			if err := checkOnClosed(l.RegionFile(), "peers."+name+" rule "+p.Rules[i].Name, p.Rules[i].OnClosed); err != nil {
+				return nil, err
+			}
+		}
+		r.Peers[name] = p
 	}
 	for i := range r.Defaults.Rules {
 		r.Defaults.Rules[i].source = "region"
@@ -431,8 +449,13 @@ func LoadOffice(l Layout, name string) (*Office, error) {
 		}
 	}
 	if o.Signers != "" {
-		if o.SignerNames, err = readFirstFields(dir + "/" + o.Signers); err != nil {
+		lines, err := readLines(dir + "/" + o.Signers)
+		if err != nil {
 			return nil, err
+		}
+		o.SignerList = parseSigners(dir+"/"+o.Signers, lines)
+		for _, s := range o.SignerList {
+			o.SignerNames = append(o.SignerNames, s.Principals...)
 		}
 	}
 	if o.Authors != "" {
@@ -497,20 +520,6 @@ func readLines(path string) ([]string, error) {
 		out = append(out, s)
 	}
 	return out, sc.Err()
-}
-
-// readFirstFields reads an allowed-signers style file: the principal is the
-// first field of each line.
-func readFirstFields(path string) ([]string, error) {
-	lines, err := readLines(path)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]string, 0, len(lines))
-	for _, l := range lines {
-		out = append(out, strings.Fields(l)[0])
-	}
-	return out, nil
 }
 
 func readRepos(path string) ([]RepoHolding, error) {

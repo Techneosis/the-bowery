@@ -16,6 +16,16 @@ type Letter struct {
 	Path string
 	Body []byte
 	Seen time.Time // when intake first listed it
+	// Sent is when the transport says the letter was sent (zero if it
+	// can't say): a time for the latency record, never for identity.
+	Sent time.Time
+}
+
+// Received is one catalog a peer region published to this one.
+type Received struct {
+	Machine string
+	Body    []byte
+	At      time.Time // when it arrived
 }
 
 // Transport is the placement transport (spec §10): the one thing that
@@ -24,13 +34,24 @@ type Letter struct {
 // Nothing outside a Transport's own implementation knows how letters move,
 // so another mailbox can be plugged in by name without touching the
 // resolver or the pull job.
+//
+// An address says where a region's boxes and catalogs are reached (a peer
+// entry's `address`); "" is this region's own. What an address looks like
+// is the transport's business alone.
 type Transport interface {
-	// Send delivers one placement to a box.
-	Send(box, id string, body []byte) error
-	// Reply delivers a line to an asker's box (a refusal, an expiry).
-	Reply(asker, id string, body []byte) error
-	// Inbox opens a box for its office's pull job.
+	// Send delivers one placement to a box at an address.
+	Send(addr, box, id string, body []byte) error
+	// Reply delivers a line to an asker's box at an address (a refusal, an
+	// expiry).
+	Reply(addr, asker, id string, body []byte) error
+	// Inbox opens a box of this region's for its office's pull job.
 	Inbox(box string) Inbox
+	// Publish delivers region from's catalog of one machine's offices to
+	// the peer at addr, replacing the one it sent before.
+	Publish(addr, from, machine string, body []byte) error
+	// Catalogs are the catalogs region from has published to this region,
+	// one per machine.
+	Catalogs(from string) ([]Received, error)
 }
 
 // Inbox is one office's side of the transport. The pull loop calls Wait,
@@ -59,23 +80,103 @@ func NewTransport(kind string, l Layout, poll time.Duration) (Transport, error) 
 
 // DirTransport is the built-in transport: a box is a directory under the
 // layout's var/boxes, a placement is a file `<id>.placement` dropped into
-// it, and a reply is `<id>.reply` in the asker's box. It is what dev mode
-// and a single machine use.
+// it, and a reply is `<id>.reply` in the asker's box. Catalogs from a peer
+// are var/catalogs/<region>/<machine>.catalog. An address is another
+// region's var directory (an absolute path), so two regions on one machine
+// (dev mode, or two roots) reach each other. It is what dev mode and a
+// single machine use.
 type DirTransport struct {
 	L    Layout
 	Poll time.Duration
 }
 
-func (t *DirTransport) Send(box, id string, body []byte) error {
-	return dropFile(t.L.BoxDir(box), id+".placement", body)
+// at is the var directory an address names.
+func (t *DirTransport) at(addr string) (string, error) {
+	if addr == "" {
+		return t.L.Var, nil
+	}
+	if !filepath.IsAbs(addr) || filepath.Clean(addr) != addr {
+		return "", fmt.Errorf("the dir transport's address is a clean absolute path to a region's var directory (got %q)", addr)
+	}
+	return addr, nil
 }
 
-func (t *DirTransport) Reply(asker, id string, body []byte) error {
-	// An asker names a box, never a path out of the boxes.
-	if asker == "" || strings.ContainsAny(asker, "/\\") || strings.Contains(asker, "..") {
+func boxName(box string) error {
+	// A box is a name, never a path out of the boxes.
+	if box == "" || strings.ContainsAny(box, "/\\") || strings.Contains(box, "..") {
+		return fmt.Errorf("%q isn't a box name", box)
+	}
+	return nil
+}
+
+func (t *DirTransport) Send(addr, box, id string, body []byte) error {
+	v, err := t.at(addr)
+	if err != nil {
+		return err
+	}
+	if err := boxName(box); err != nil {
+		return err
+	}
+	return dropFile(filepath.Join(v, "boxes", box), id+".placement", body)
+}
+
+func (t *DirTransport) Reply(addr, asker, id string, body []byte) error {
+	v, err := t.at(addr)
+	if err != nil {
+		return err
+	}
+	if err := boxName(asker); err != nil {
 		return fmt.Errorf("asker %q isn't a box name", asker)
 	}
-	return dropFile(t.L.BoxDir("asker-"+asker), id+".reply", body)
+	return dropFile(filepath.Join(v, "boxes", "asker-"+asker), id+".reply", body)
+}
+
+func (t *DirTransport) Publish(addr, from, machine string, body []byte) error {
+	v, err := t.at(addr)
+	if err != nil {
+		return err
+	}
+	if !NameRE.MatchString(from) || !LabelRE.MatchString(machine) || strings.ContainsAny(machine, "/") {
+		return fmt.Errorf("region %q or machine %q isn't a name", from, machine)
+	}
+	dir := filepath.Join(v, "catalogs", from)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	return WriteAtomic(filepath.Join(dir, machine+".catalog"), body, 0o644)
+}
+
+func (t *DirTransport) Catalogs(from string) ([]Received, error) {
+	if !NameRE.MatchString(from) {
+		return nil, fmt.Errorf("%q isn't a region name", from)
+	}
+	dir := filepath.Join(t.L.Var, "catalogs", from)
+	ents, err := os.ReadDir(dir)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var out []Received
+	for _, e := range ents {
+		n := e.Name()
+		if !strings.HasSuffix(n, ".catalog") || strings.HasPrefix(n, ".") {
+			continue
+		}
+		p := filepath.Join(dir, n)
+		b, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		r := Received{Machine: strings.TrimSuffix(n, ".catalog"), Body: b}
+		if fi, err := os.Stat(p); err == nil {
+			r.At = fi.ModTime()
+		}
+		out = append(out, r)
+	}
+	sort.Slice(out, func(i, k int) bool { return out[i].Machine < out[k].Machine })
+	return out, nil
 }
 
 func (t *DirTransport) Inbox(box string) Inbox {
@@ -183,7 +284,11 @@ func (d *DirInbox) List() ([]Letter, error) {
 		if err != nil {
 			continue
 		}
-		out = append(out, Letter{ID: strings.TrimSuffix(n, ".placement"), Path: p, Body: b, Seen: time.Now()})
+		l := Letter{ID: strings.TrimSuffix(n, ".placement"), Path: p, Body: b, Seen: time.Now()}
+		if fi, err := e.Info(); err == nil {
+			l.Sent = fi.ModTime() // written once, by a rename: the send
+		}
+		out = append(out, l)
 	}
 	sort.Slice(out, func(i, k int) bool { return out[i].ID < out[k].ID })
 	return out, nil

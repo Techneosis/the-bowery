@@ -414,7 +414,7 @@ func acceptedJob(c *Config, id string) (*Job, error) {
 	if err != nil {
 		return nil, err
 	}
-	return Decode(b)
+	return c.ReadLetter(b)
 }
 
 // surfaceCmd runs one of a running job's surface commands (hold, resume,

@@ -458,12 +458,12 @@ host is a second binary, `office`; bowery's part is the resolver.
 
 | file | where (root mode) | holds |
 |---|---|---|
-| region file | `/usr/local/etc/offices/region.toml` | the region's name, timezone, offices, priorities, reserved effects, tiers, naming, defaults (rule timeout, retry tick), region-wide rule instances; its key and peers are read but not used yet |
-| machine file | `/usr/local/etc/offices/machine.toml` | the machine's name, the placement transport, installed rule plugins (pinned by sha256), surfaces, machine-wide rule instances |
+| region file | `/usr/local/etc/offices/region.toml` | the region's name, timezone, public key, offices, priorities, reserved effects, tiers, naming, defaults (rule timeout, retry tick), region-wide rule instances, and its peers (address, pinned key, `may_place`, peer rules) |
+| machine file | `/usr/local/etc/offices/machine.toml` | the machine's name, the placement transport, the region's private key for publishing (`region_key`), installed rule plugins (pinned by sha256), surfaces, machine-wide rule instances |
 | office record | `/usr/local/etc/offices/<office>/office.toml` + `repos`, `signers`, `authors` | identity, kinds, profile, surfaces, holdings, signers, `[rules]` |
 | office state | `/var/lib/offices/<office>/state` | the owner's override: open or closed, optionally `until`, `kinds`, `scope` |
 | office log | `/var/lib/offices/<office>/log` | every flip, verdict, acceptance, refusal and launch, as JSON lines |
-| `[placement]` | bowery's `config.toml` | which regions and offices to consider, ranking, per-kind defaults |
+| `[placement]` | bowery's `config.toml` | which regions and offices to consider, ranking, per-kind defaults, the askers' signing keys (`keys`) and the region's (`region_key`) |
 
 Every config decoder refuses unknown keys. In root mode every config file and
 plugin must be owned by root and writable by nobody else, and `office pull`
@@ -533,15 +533,21 @@ placed dispatch writes no herdr record: the office's surface starts the agent.
 
 ### The placement and the pull job
 
-A placement is one fenced block of `key = "value"` lines, sorted: the bytes a
-signature will cover. It is bound to one office (`office`, `machine`,
-`region`), and its id is the job's key. The transport is one interface (send
-to a box, wait on a box, reply to an asker), picked by name in the machine
-file and bowery's config; the built-in one, `dir`, makes each box a directory
-under `var/boxes/`. Nothing else knows how letters travel.
+A placement is one fenced block of `key = "value"` lines, sorted: the bytes
+the signatures cover. It is bound to one office (`office`, `machine`,
+`region`), names the asker's region (`from`), and its id is the job's key.
+The letter is that block followed by the asker's signature and, from another
+region, that region's seal (see "Regions and peering"). The transport is one
+interface (send to a box at an address, wait on a box, reply to an asker at
+an address, publish a catalog to a peer, read the catalogs peers sent),
+picked by name in the machine file and bowery's config; the built-in one,
+`dir`, makes each box a directory under `var/boxes/` and takes another
+region's var directory as an address. Nothing else knows how letters travel.
 
 `office pull <office>` is the office's pull job. For each letter, in priority
-order: an unreadable one is dropped (and answered to nobody); one for another
+order: an unreadable one, or one not signed by a key its signers file lists,
+is dropped (and answered to nobody); a peer's that can't come in is refused
+(see below); one for another
 office, of a kind it doesn't take, or needing something it doesn't hold, is
 refused (logged, one reply to the asker); a second copy of an accepted id is
 discarded; an expired one is dropped and the asker told. The rest are judged
@@ -555,10 +561,14 @@ placement again only when its retry time comes, an event happens, or the
 region's `retry_tick` passes. A transport that can long-poll implements
 `Wait` by blocking, and the loop doesn't change.
 
-Every stage is timed: the placement carries `resolve_at`, `signed_at` and
-`sent_at`; the office logs `delivered`, `accepted` and `started` with all the
-earlier ones (`stages` on the `launched` line), and `place.log` has the
-resolver's half.
+Every stage is timed: the placement carries `resolve_at` and `signed_at`
+(the asker's clock), the transport gives the send time (a file's mtime for
+`dir`; a signed block can't carry a time that comes after it is signed), and
+the office logs `delivered`, `verified` (its signatures checked), `accepted`
+and `started` with all the earlier ones (`stages` on the `launched` line).
+`place.log` has the resolver's half: `resolve`, `resolved`, `sign`, `seal`
+(between regions), `send` and `sent`. Across a peer hop the two halves join
+on the job id into one timeline.
 
 ### Rules on the machine
 
@@ -657,13 +667,85 @@ gate files, running work and requests) every `--interval`. It wakes for
 whichever comes first, or for a waiting placement's retry, an owner's
 `until`, or the run interval, and never sleeps past `--backstop`.
 
+### Regions and peering
+
+**Signatures.** Every signature is an SSH signature in the format
+`ssh-keygen -Y sign` writes, made and checked by the binaries themselves
+(ssh-ed25519 keys; the standard library is enough). Each kind has its own
+namespace, so one can never pass as another: `placement` (the asker's),
+`placement-region` (a region's seal), `offices-catalog` (a region's
+catalog). A key with a passphrase or held in an agent is signed with by
+`ssh-keygen` itself; every signature is checked natively.
+
+**The asker signs.** `bowery place` signs the block with the asker's key:
+`[placement] keys.<principal>`, or, for the invoking user, `~/.ssh/id_ed25519`.
+Without one it places nothing (exit 1). The office checks the signature
+against its signers file, which is `ssh-keygen`'s allowed_signers format
+(`principals [namespaces="…"] ssh-ed25519 <key>`; patterns and other options
+are refused, and `office check` reports a line that can never verify). A
+principal of the office's own region is written bare; one from a peer region
+`<principal>@<region>`, so the same name in two regions is two signers, and a
+peer's principal can't pass as a local one by leaving out `from` (the key
+wouldn't be listed bare). `asked_by` and `from` may not contain `@`.
+
+**Peers.** A region file's `[peers.<region>]` gives the peer's `address` (the
+transport's business), its pinned `key`, `may_place` (this region's offices
+it may place into) and `[[peers.<region>.rules]]`, rule instances every
+placement from it must also pass. A link exists only when both files declare
+each other. A placement into a peer's office is sealed by the asker's region
+(`[placement] region_key`, checked against its own region file's key before
+it signs) and sent to the peer's address. The receiving office, after the
+asker's signature, checks: the region is a peer, the seal verifies and is by
+the pinned key, and the office is in `may_place`. Any of those failing is a
+refusal, replied to the asker at the peer's address if the peer is still
+declared (otherwise logged `reply-failed`). Then the usual checks, and the
+accept-phase rules with the peer's rules added (logged with source `peer`);
+a closed peer rule keeps the placement waiting like any other rule.
+
+**Revoking is one edit.** Every evaluation of a peer's job, at every phase,
+also checks the link as it stands now: the entry is there, `may_place` still
+names the office, and the pin is still the key that sealed the letter (read
+again from the accepted letter). If not, the result is `closed` with an
+integrity mark, so the owner's `open` doesn't override it: new placements
+are refused, and running ones are held per the office's `on_closed` and
+resume in place if the link comes back.
+
+**Catalogs.** `office publish` (run by whoever may read the region key the
+machine file names: open question 2) builds, for each declared peer, the
+catalog of this machine's offices in that peer's `may_place`: holdings,
+state, office-wide verdicts, running count, and the region's vocabulary
+(priorities, reserved effects, `max_expires`), with no other jobs and no
+local paths. It is signed with the region key, stamped `valid_until`
+(`--valid`, default 10m), and published to the peer's address, replacing the
+last one. A peer granted nothing gets an empty catalog, so narrowing reaches
+it on the next publish; a peer struck from the file gets nothing, and its
+office refusals do the rest. The resolver reads the catalogs a peer sent
+(`consider.regions` names the peer), verifies each against the pin, and
+plans over the offices listed. A catalog that doesn't verify is no link:
+none of its offices is a candidate. A missing or stale one is a wait (the
+peer may publish), not a setup gap. A peer's office is filtered on the
+catalog alone (holdings against its region's vocabulary, its `max_expires`,
+the owner's state, unexpired office-wide verdicts); there is no probe across
+regions, and the office decides when the letter arrives. `bowery peers`
+shows each peer's pin, its problems and what it published.
+
+**Another region's clock.** The peer hop keeps the gate's clock rules. A
+catalog published more than 5s ahead of the reader's clock, or an owner's
+state in it dated ahead, is refused until it isn't (the job waits; the
+offices aren't planned over). A peer placement signed ahead of the office's
+clock is refused, since `max_expires` counts from the signing time. A retry
+time that has already passed (a peer's verdict, a lagging slot) is never
+booked as a retry: the resolver drops it, and the office's long-poll waits
+for an event or the backstop instead of waking for it.
+
 ### Not yet
 
-Signatures (the requester's and the region's), peers and catalogs, the
-wrapper and daemon, the `module` kind, and the evaluator's own user. Until
-then: `asked_by` is checked against the office's signers by name only, rule
-plugins run as whoever runs the evaluation (the office's user, in the pull
-job), and the resume re-check is the pull job's, not a wrapper's.
+The wrapper and daemon, the `module` kind, the evaluator's own user,
+`may_view`, catalogs published on an event (an office opening) rather than
+when `office publish` runs, and peers' own published verdicts for their
+peer rules. Rule plugins run as whoever runs the evaluation (the office's
+user, in the pull job), and the resume re-check is the pull job's, not a
+wrapper's.
 
 ## The worktree-group hazard
 

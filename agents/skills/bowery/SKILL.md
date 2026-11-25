@@ -273,6 +273,13 @@ opens. A held job is never yours to re-place: `bowery office describe
 <office>` shows it held and why. Only the owner ends one (`bowery office
 stop <office> <job>`).
 
+Every placement is signed with the asker's key (`[placement] keys` in
+bowery's config): "no signing key for X" is a setup gap to report, not a
+reason to place as someone else. Offices in another region are reached only
+when both regions declare each other; `bowery peers` shows each peer, whether
+its catalog verifies, and the offices it lets this region use. An office not
+listed there doesn't exist for you: don't try to reach it another way.
+
 ## Remote dispatch (`--machine`, `--as`)
 
 For work on a shared box running its own herdr server, saved locally as a

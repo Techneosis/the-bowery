@@ -199,8 +199,8 @@ plugin that isn't the one that was pinned shuts it even against the owner's
 word. Every verdict and every opening and closing goes in the office's
 decisions book, which its own staff can add to but never rewrite; the rest
 (what came in, what started) and the time of each stage (resolve, sign,
-send, delivered, accepted, started) go in its daybook, and bowery keeps
-`place.log`.
+send, delivered, verified, accepted, started) go in its daybook, and bowery
+keeps `place.log`.
 
 **A gate on the door.** A service on the machine can keep a sign in the
 window: a small file saying whether the room is open, why not, and when it
@@ -224,6 +224,26 @@ The office takes in its post with a **long-poll**: it sits by the letterbox
 and wakes the moment a letter lands, glances at its signs every `--interval`,
 and looks round anyway at the backstop.
 
+**Every letter is signed.** The one who asks signs the placement with their
+own key (`ssh-keygen -Y` signatures, so anyone can check one by hand), and
+the office looks the key up in its own list of who may send it work. A letter
+nobody on that list signed is thrown away unanswered.
+
+**Other districts.** Offices belong to a **region**: one owner's district,
+with its own seal (a signing key). Two districts work together only when
+each names the other in its region file, with the other's seal on file
+(pinned). Each says only what the other may do *here*: which of its offices
+the other may send work to, and the house rules that work must also pass.
+Each district posts the other a **signed list** of just those offices, what
+they hold and whether their doors are open (`office publish`); a dispatcher
+plans over its own offices and those lists, and never learns of an office
+the other district didn't list for it (`bowery peers`). A letter from across
+the district line carries two signatures, the asker's and their district's
+seal. A seal that isn't the one on file, an office not on the list, or a
+district that has struck the other's entry from its file: the letter is
+refused, and work already started under it is asked to yield, as if its
+door had shut. Striking the entry is the whole of revoking.
+
 ```
 bowery place --kind review --needs tools=git -- "review PR 12"   # 0 placed, 4 waiting, 3 refused, 1 error
 bowery dispatch rev --job-kind review --office region-a-reviews -- "review PR 12"
@@ -234,6 +254,8 @@ office close region-a-reviews --now         # and stop the work in progress, kep
 office stop region-a-reviews rev-12         # send a held agent home
 office pull region-a-reviews --loop         # the office taking in its post
 office log region-a-reviews --since 1h      # the daybook and the decisions book
+office publish                              # post each peer district its signed list
+bowery peers                                # what the other districts post to us
 ```
 
 `OFFICE_ROOT=<dir>` runs every office under one directory as you, for trying

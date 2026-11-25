@@ -38,6 +38,8 @@ type PullReport struct {
 // waiting: when it arrived, and when to look again.
 type pending struct {
 	DeliveredAt string `json:"delivered_at"`
+	SentAt      string `json:"sent_at,omitempty"`     // the transport's send time
+	VerifiedAt  string `json:"verified_at,omitempty"` // its signatures checked`
 	LastEval    string `json:"last_eval"`
 	RetryAfter  string `json:"retry_after,omitempty"`
 	Reason      string `json:"reason"`
@@ -158,36 +160,71 @@ func Pull(c *Config, ev *Evaluator, t Transport, in Inbox, force bool) (*PullRep
 	pend := c.readPending()
 	o := c.Office.Name
 	type item struct {
-		l Letter
-		j *Job
+		l    Letter
+		j    *Job
+		peer string // why a peer's placement can't come in, if it can't
 	}
 	var items []item
 	for _, l := range letters {
-		j, derr := Decode(l.Body)
 		now := time.Now()
+		drop := func(why string) error {
+			// Dropped: replies to nobody, and never echoes what it said.
+			if err := Append(c.L, o, Entry{"event": "drop", "letter": l.ID, "why": why}); err != nil {
+				return err
+			}
+			_ = in.Done(l, c.L.Refused(o))
+			delete(pend, l.ID)
+			rep.Dropped = append(rep.Dropped, PullItem{ID: l.ID, Reason: why})
+			return nil
+		}
+		block, sigs, derr := SplitLetter(l.Body)
+		var j *Job
+		if derr == nil {
+			j, derr = Decode(block)
+		}
 		if derr != nil || j.ID != l.ID {
 			why := "not a placement this office can read"
 			if derr == nil {
 				why = "its id doesn't match its letter"
 			}
-			// Dropped: replies to nobody, and never echoes what it said.
-			if err := Append(c.L, o, Entry{"event": "drop", "letter": l.ID, "why": why}); err != nil {
+			if err := drop(why); err != nil {
 				return nil, err
 			}
-			_ = in.Done(l, c.L.Refused(o))
-			delete(pend, l.ID)
-			rep.Dropped = append(rep.Dropped, PullItem{ID: l.ID, Reason: why})
 			continue
+		}
+		// The requester's signature, against the office's own signers file
+		// (spec §8.1). Not signed by a listed signer: dropped, unanswered.
+		key, why := c.VerifyRequester(j, block, sigs["requester"])
+		if why != "" {
+			if err := drop(why); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		peer := ""
+		if j.From != "" && j.From != c.Region.Region {
+			peer = c.PeerProblem(j, block, sigs["region"])
 		}
 		if _, seen := pend[j.ID]; !seen {
 			p := pending{DeliveredAt: Stamp(now)}
+			if !l.Sent.IsZero() {
+				p.SentAt = Stamp(l.Sent)
+			}
+			p.VerifiedAt = Stamp(time.Now())
 			pend[j.ID] = p
-			if err := Append(c.L, o, Entry{"event": "delivered", "job": j.ID, "kind": j.Kind, "asked_by": j.AskedBy,
-				"stages": stages(j, p.DeliveredAt, "", "")}); err != nil {
+			e := Entry{"event": "delivered", "job": j.ID, "kind": j.Kind, "asked_by": j.AskedBy,
+				"signer": key.Fingerprint(), "stages": stages(j, p, "", "")}
+			if j.From != "" && j.From != c.Region.Region {
+				e["from"] = j.From
+				if j.seal != nil {
+					e["seal"] = j.seal.Fingerprint()
+				}
+			}
+			if err := Append(c.L, o, e); err != nil {
 				return nil, err
 			}
 		}
-		items = append(items, item{l, j})
+		items = append(items, item{l, j, peer})
 	}
 	// Priority order, then oldest first.
 	sort.SliceStable(items, func(a, b int) bool {
@@ -197,6 +234,22 @@ func Pull(c *Config, ev *Evaluator, t Transport, in Inbox, force bool) (*PullRep
 		}
 		return items[a].j.SignedAt < items[b].j.SignedAt
 	})
+	// reply tells an asker, in its own region's boxes: this one's, or a
+	// peer's at its address. One that can't be told is logged.
+	reply := func(j *Job, text string) error {
+		addr := ""
+		if j.From != "" && j.From != c.Region.Region {
+			p, ok := c.Region.Peers[j.From]
+			if !ok {
+				return Append(c.L, o, Entry{"event": "reply-failed", "job": j.ID, "why": "region " + j.From + " isn't a peer: no address to reply to"})
+			}
+			addr = p.Address
+		}
+		if err := t.Reply(addr, j.AskedBy, j.ID, []byte(text)); err != nil {
+			return Append(c.L, o, Entry{"event": "reply-failed", "job": j.ID, "why": err.Error()})
+		}
+		return nil
+	}
 	events := c.Events()
 	rep.Events = events
 	tick := Duration(c.Region.Defaults.RetryTick, 10*time.Minute)
@@ -207,17 +260,23 @@ func Pull(c *Config, ev *Evaluator, t Transport, in Inbox, force bool) (*PullRep
 		now := time.Now().UTC()
 		refuse := func(why string) error {
 			if err := Append(c.L, o, Entry{"event": "place-refused", "job": j.ID, "kind": j.Kind, "scope": j.Scope,
-				"asked_by": j.AskedBy, "region": j.Region, "reason": why}); err != nil {
+				"asked_by": j.AskedBy, "region": j.Region, "from": j.From, "reason": why}); err != nil {
 				return err
 			}
 			_ = in.Done(l, c.L.Refused(o))
 			delete(pend, j.ID)
 			rep.Refused = append(rep.Refused, PullItem{ID: j.ID, Reason: why})
 			// Once, to the asker, with the reason.
-			if err := t.Reply(j.AskedBy, j.ID, []byte(fmt.Sprintf("refused %s by %s: %s\n", j.ID, o, why))); err != nil {
-				return Append(c.L, o, Entry{"event": "reply-failed", "job": j.ID, "why": err.Error()})
+			return reply(j, fmt.Sprintf("refused %s by %s: %s\n", j.ID, o, why))
+		}
+		// A peer's placement that can't come in (not a peer, an unpinned
+		// seal, not in may_place) is refused: its requester is a listed
+		// signer, so the asker is told, where the transport can reach it.
+		if it.peer != "" {
+			if err := refuse(it.peer); err != nil {
+				return nil, err
 			}
-			return nil
+			continue
 		}
 		// Bound to this office: a copy delivered anywhere else fails.
 		if j.Office != o || j.Machine != c.Machine.Machine || j.Region != c.Region.Region {
@@ -235,10 +294,8 @@ func Pull(c *Config, ev *Evaluator, t Transport, in Inbox, force bool) (*PullRep
 				if f, err := os.OpenFile(filepath.Join(c.L.Replied(o), j.ID), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644); err == nil {
 					f.Close()
 					replied = true
-					if err := t.Reply(j.AskedBy, j.ID, []byte(fmt.Sprintf("already accepted %s at %s; a replay starts nothing\n", j.ID, o))); err != nil {
-						if err := Append(c.L, o, Entry{"event": "reply-failed", "job": j.ID, "why": err.Error()}); err != nil {
-							return nil, err
-						}
+					if err := reply(j, fmt.Sprintf("already accepted %s at %s; a replay starts nothing\n", j.ID, o)); err != nil {
+						return nil, err
 					}
 				}
 			}
@@ -255,7 +312,9 @@ func Pull(c *Config, ev *Evaluator, t Transport, in Inbox, force bool) (*PullRep
 			}
 			_ = in.Done(l, c.L.Expired(o))
 			delete(pend, j.ID)
-			_ = t.Reply(j.AskedBy, j.ID, []byte(fmt.Sprintf("expired %s at %s while waiting; send it again if it is still wanted\n", j.ID, o)))
+			if err := reply(j, fmt.Sprintf("expired %s at %s while waiting; send it again if it is still wanted\n", j.ID, o)); err != nil {
+				return nil, err
+			}
 			rep.Dropped = append(rep.Dropped, PullItem{ID: j.ID, Reason: "expired while waiting"})
 			continue
 		}
@@ -331,7 +390,7 @@ func Pull(c *Config, ev *Evaluator, t Transport, in Inbox, force bool) (*PullRep
 		acceptedAt := Stamp(time.Now())
 		delete(pend, j.ID)
 		if err := Append(c.L, o, Entry{"event": "place-accepted", "job": j.ID, "kind": j.Kind, "scope": j.Scope,
-			"asked_by": j.AskedBy, "region": j.Region, "by": res.By, "stages": stages(j, p.DeliveredAt, acceptedAt, "")}); err != nil {
+			"asked_by": j.AskedBy, "region": j.Region, "from": j.From, "by": res.By, "stages": stages(j, p, acceptedAt, "")}); err != nil {
 			return nil, err
 		}
 		surface := launchSurface(c, j)
@@ -346,7 +405,7 @@ func Pull(c *Config, ev *Evaluator, t Transport, in Inbox, force bool) (*PullRep
 		} else {
 			item.Exit = &code
 			if err := Append(c.L, o, Entry{"event": "launched", "job": j.ID, "surface": surface, "exit": code,
-				"stages": stages(j, p.DeliveredAt, acceptedAt, startedAt)}); err != nil {
+				"stages": stages(j, p, acceptedAt, startedAt)}); err != nil {
 				return nil, err
 			}
 			// A surface that started its agent (exit 0) leaves a running job,
@@ -384,12 +443,17 @@ func Pull(c *Config, ev *Evaluator, t Transport, in Inbox, force bool) (*PullRep
 }
 
 // stages is the latency record: the time of each placement stage that has
-// happened yet. "sign" is when the block was made (placements are unsigned
-// until signatures land; it is still the moment the bytes were fixed).
-func stages(j *Job, delivered, accepted, started string) map[string]string {
+// happened yet, across machines and regions. resolve and sign come from the
+// signed block (the asker's clock); send from the transport; delivered,
+// verified (the signatures checked), accepted and started from this office.
+func stages(j *Job, p pending, accepted, started string) map[string]string {
 	m := map[string]string{}
-	for k, v := range map[string]string{"resolve": j.ResolveAt, "sign": j.SignedAt, "send": j.SentAt,
-		"delivered": delivered, "accepted": accepted, "started": started} {
+	send := p.SentAt
+	if send == "" {
+		send = j.SentAt // an M1 block carried it
+	}
+	for k, v := range map[string]string{"resolve": j.ResolveAt, "sign": j.SignedAt, "send": send,
+		"delivered": p.DeliveredAt, "verified": p.VerifiedAt, "accepted": accepted, "started": started} {
 		if v != "" {
 			m[k] = v
 		}

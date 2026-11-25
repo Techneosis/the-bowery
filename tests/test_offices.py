@@ -24,6 +24,7 @@ import time
 import unittest
 from pathlib import Path
 
+import _keys
 from _binary import BIN, HOURS_BIN, OFFICE_BIN
 
 HOST = socket.gethostname().split(".")[0]
@@ -91,7 +92,7 @@ class Offices(unittest.TestCase):
         self.flag = t / "flag.json"
         self.set_flag("open")
         self.config = t / "config.toml"
-        self.config.write_text(f'[placement]\noffice_command = "{OFFICE_BIN}"\n')
+        self.write_config()
         self.state = t / "state"
         self.env = {
             "PATH": os.environ["PATH"],
@@ -111,6 +112,15 @@ class Offices(unittest.TestCase):
 
     # ------------------------------------------------------------ config
 
+    PRINCIPALS = ("alice", "manager", "mallory")
+
+    def write_config(self, extra="", office_command=None):
+        """bowery's [placement]: the office host, and every principal's
+        signing key (a placement nobody signed is dropped)."""
+        keys = ", ".join(f'{p} = "{_keys.key(p)}"' for p in self.PRINCIPALS)
+        self.config.write_text(f'[placement]\noffice_command = "{office_command or OFFICE_BIN}"\n'
+                               f'keys = {{ {keys} }}\n' + extra)
+
     def set_flag(self, verdict, **extra):
         v = {"verdict": verdict, **extra}
         if verdict == "closed" and "reason" not in v:
@@ -122,7 +132,7 @@ class Offices(unittest.TestCase):
             region   = "region-a"
             owner    = "alice"
             timezone = "UTC"
-            key      = "ssh-ed25519 AAAA region-a"
+            key      = "{_keys.pub('region-a')}"
             offices  = [{{ name = "{self.REVIEWS}", machine = "{HOST}" }},
                         {{ name = "{self.BUILDER}", machine = "{HOST}" }},
                         {{ name = "region-a-faraway", machine = "box-1" }}]
@@ -166,7 +176,7 @@ class Offices(unittest.TestCase):
     def write_office(self, name, kinds, tools, rules, default="open", extra=""):
         d = self.etc / name
         (d / "repos").write_text("org/app modes=read-only,job house=local\norg/acme modes=job scope=acme\n")
-        (d / "signers").write_text("alice ssh-ed25519 AAAA alice\nmanager ssh-ed25519 AAAA manager\n")
+        (d / "signers").write_text(f"alice {_keys.pub('alice')} alice\nmanager {_keys.pub('manager')} manager\n")
         (d / "office.toml").write_text(textwrap.dedent(f"""\
             name     = "{name}"
             region   = "region-a"
@@ -361,8 +371,9 @@ class Stages(Offices):
         self.pull()
         launched = self.events(self.REVIEWS, "launched")[0]
         st = launched["stages"]
-        self.assertEqual(list(sorted(st)), sorted(["resolve", "sign", "send", "delivered", "accepted", "started"]))
-        order = [st[k] for k in ("resolve", "sign", "send", "delivered", "accepted", "started")]
+        stages = ("resolve", "sign", "send", "delivered", "verified", "accepted", "started")
+        self.assertEqual(list(sorted(st)), sorted(stages))
+        order = [st[k] for k in stages]
         self.assertEqual(order, sorted(order))
         self.assertIn("stages", self.place_log()[-1])
 
@@ -581,7 +592,7 @@ class Resolver(Offices):
         self.write_office(self.BUILDER, ["review", "builder"], ["git"], "")
         out, _ = self.place("--kind", "review", code=0)
         self.assertEqual(out["placed"]["office"], self.BUILDER)  # name order, both equal
-        self.config.write_text(f'[placement]\noffice_command = "{OFFICE_BIN}"\nprefer = ["{self.REVIEWS}"]\n')
+        self.write_config(f'prefer = ["{self.REVIEWS}"]\n')
         out, _ = self.place("--kind", "review", code=0)
         self.assertEqual(out["placed"]["office"], self.REVIEWS)
         out, _ = self.place("--kind", "review", "--pin", self.BUILDER, code=0)
@@ -591,8 +602,7 @@ class Resolver(Offices):
         self.assertIn(self.BUILDER, out["queued"]["waiting_for"])
 
     def test_never_keeps_a_scope_in_its_regions(self):
-        self.config.write_text(f'[placement]\noffice_command = "{OFFICE_BIN}"\n'
-                               'never = [{ scope = "acme", outside = ["region-b"] }]\n')
+        self.write_config('never = [{ scope = "acme", outside = ["region-b"] }]\n')
         _, r = self.place("--kind", "review", "--scope", "acme", code=1)
         self.assertIn("never: scope acme", r.stdout)
 
@@ -653,13 +663,14 @@ class Pull(Offices):
         box.mkdir(parents=True, exist_ok=True)
         (box / (name + ".placement")).write_text(body)
 
-    def letter(self, **kw):
+    def letter(self, signer="alice", **kw):
+        """A placement letter, signed by signer's key (None: unsigned)."""
         fields = {"id": "x1", "kind": "review", "asked_by": "alice", "expires": "2099-01-01T00:00:00Z",
                   "signed_at": "2098-12-31T12:00:00Z",
                   "office": self.REVIEWS, "machine": HOST, "region": "region-a"}
         fields.update(kw)
-        lines = "".join(f'{k} = {json.dumps(v)}\n' for k, v in sorted(fields.items()))
-        return "```placement\n" + lines + "```\n"
+        lines = "".join(f'{k} = {json.dumps(v)}\n' for k, v in sorted(fields.items()) if v is not None)
+        return _keys.letter("```placement\n" + lines + "```\n", requester=signer)
 
     def test_the_office_checks_every_placement_again(self):
         self.drop("x1", self.letter(office=self.BUILDER))
@@ -777,7 +788,7 @@ class Review(Pull):
     """Found in review of offices-m1: each of these failed before its fix."""
 
     def test_a_placement_with_no_signing_time_can_not_dodge_max_expires(self):
-        body = self.letter(id="nosign").replace('signed_at = "2098-12-31T12:00:00Z"\n', "")
+        body = self.letter(id="nosign", signed_at=None)  # signed as it is: no signing time
         self.assertNotIn("signed_at", body)
         self.drop("nosign", body)
         rep = self.pull()
@@ -804,7 +815,7 @@ class Review(Pull):
         wrap = self.lib / "office-wrap"
         wrap.write_text(f"#!/bin/sh\n[ \"$3\" = --probe ] && exit 1\nexec {OFFICE_BIN} \"$@\"\n")
         wrap.chmod(0o755)
-        self.config.write_text(f'[placement]\noffice_command = "{wrap}"\n')
+        self.write_config(office_command=wrap)
         out, _ = self.place("--kind", "review", "--id", "mute-1", code=4)
         self.assertIn("queued", out)
         self.assertTrue((self.state / "queue" / "mute-1.json").exists())

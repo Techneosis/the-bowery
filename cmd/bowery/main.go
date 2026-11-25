@@ -17,6 +17,7 @@ const usage = `bowery: send agents out into herdr, and bring them home with done
   bowery watch <config> [--poll 30s] [--max 45m]   (bowery watch --help)
   bowery place --kind <KIND> [job options] [-- <prompt>]
   bowery place --retry | bowery queue [--json] | bowery office ls|describe|log ...
+  bowery peers [--json]
 
 dispatch: make (or take) a pane, start the agent, tag it quiet, optionally
 hand it a prompt, and record what was made for it. Prints JSON:
@@ -116,6 +117,9 @@ placement (offices: see docs/design.md, "Placement into offices")
                            drop the expired. Prints placed/waiting/dropped
                            and next_retry, for a scheduler to book
   queue [--json]           the jobs waiting for an office
+  peers [--json]           each peer region this one declares: its pinned key,
+                           whether its catalogs verify, and the offices it
+                           published to this region (the only ones placed into)
   office ls|describe <O>|log <O> [--since DUR]
                            the office host's answers (office --help)
 
@@ -221,6 +225,8 @@ func main() {
 		cmdPlace(rest)
 	case "queue":
 		cmdQueue(rest)
+	case "peers":
+		cmdPeers(rest)
 	case "office":
 		cmdOffice(rest)
 	case "done":

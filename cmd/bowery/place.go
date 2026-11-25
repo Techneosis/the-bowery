@@ -35,6 +35,15 @@ type PlacementConfig struct {
 	Transport string `toml:"transport"`
 	// The office host to ask (default "office" on PATH).
 	OfficeCommand string `toml:"office_command"`
+	// Keys are the private key files placements are signed with, by the
+	// principal who asks (spec §8.1): `keys = { alice = "~/.ssh/id_ed25519" }`.
+	// Without an entry, the invoking user's own placements are signed with
+	// ~/.ssh/id_ed25519.
+	Keys map[string]string `toml:"keys"`
+	// RegionKey is this region's private key, which seals a placement sent
+	// to a peer region (spec §6, §8.1). Its public half must be the region
+	// file's key.
+	RegionKey string `toml:"region_key"`
 }
 
 type NeverRule struct {
@@ -241,6 +250,7 @@ func finishJob(j *offices.Job, reg *offices.Region) {
 		}
 	}
 	j.Expires = time.Now().UTC().Add(d).Format(time.RFC3339)
+	j.From = reg.Region
 	if j.Priority != "" && len(reg.Priorities) > 0 && !contains(reg.Priorities, j.Priority) {
 		die("priority %s isn't one of region %s's (%s)", j.Priority, reg.Region, strings.Join(reg.Priorities, ", "))
 	}
@@ -263,7 +273,10 @@ type Candidate struct {
 	Owner      string `json:"owner,omitempty"`
 	Running    int    `json:"running"`
 
-	cat *offices.Catalog
+	cat   *offices.Catalog
+	peer  bool            // an office a peer region published to this one
+	vocab *offices.Region // the peer region's words, from its catalog
+	addr  string          // where its box is reached ("" for this region's)
 }
 
 type Decision struct {
@@ -295,6 +308,50 @@ func placementSetup() *offices.Region {
 		}
 	}
 	return reg
+}
+
+var loadedKeys = map[string]offices.PrivateKey{}
+
+// requesterKey is the asking principal's signing key: [placement] keys,
+// or the invoking user's ~/.ssh/id_ed25519. Without one, nothing is
+// placed: an office drops what isn't signed by a listed signer.
+func requesterKey(who string) offices.PrivateKey {
+	if k, ok := loadedKeys["p:"+who]; ok {
+		return k
+	}
+	path := cfg.Placement.Keys[who]
+	if path == "" {
+		if who != offices.Whoami() && who != os.Getenv("USER") {
+			die("no signing key for %s: [placement] keys.%s names the private key it signs placements with", who, who)
+		}
+		path = "~/.ssh/id_ed25519"
+	}
+	k, err := offices.LoadPrivateKey(expandUser(path))
+	if err != nil {
+		die("%s's signing key: %v ([placement] keys)", who, err)
+	}
+	loadedKeys["p:"+who] = k
+	return k
+}
+
+// regionKey is this region's private key, checked against the region file.
+func regionKey(reg *offices.Region) offices.PrivateKey {
+	if k, ok := loadedKeys["region"]; ok {
+		return k
+	}
+	if cfg.Placement.RegionKey == "" {
+		die("placing into a peer region needs [placement] region_key: region %s's private key, to seal it", reg.Region)
+	}
+	k, err := offices.LoadPrivateKey(expandUser(cfg.Placement.RegionKey))
+	if err != nil {
+		die("region_key: %v", err)
+	}
+	pin, err := offices.ParsePublicKey(reg.Key)
+	if err != nil || !pin.Equal(k.Public) {
+		die("region_key (%s) isn't region %s's key, as its region file says it", k.Public.Fingerprint(), reg.Region)
+	}
+	loadedKeys["region"] = k
+	return k
 }
 
 func officeCmd() string {
@@ -343,6 +400,9 @@ type probeAnswer struct {
 func resolve(j *offices.Job, reg *offices.Region) *Decision {
 	d := &Decision{Job: j, Candidates: []*Candidate{}, Ranking: []string{}}
 	j.ResolveAt = offices.Stamp(time.Now())
+	if j.From == "" {
+		j.From = reg.Region // a job queued before regions signed
+	}
 	for _, e := range j.Effects {
 		if contains(reg.ReservedEffects, e) {
 			d.Reserved = e
@@ -370,7 +430,26 @@ func resolve(j *offices.Job, reg *offices.Region) *Decision {
 			c.Class, c.Reason = "unreachable", "on machine "+ro.Machine+"; this bowery places only into offices on its own machine"
 		}
 	}
-	// Peers' offices arrive with their catalogs; none are planned over yet.
+	// A peer's offices are the ones its catalogs list: never one it didn't
+	// publish to this region (spec §6).
+	t, terr := offices.NewTransport(cfg.Placement.Transport, placeLayout, 0)
+	if terr != nil {
+		die("%v", terr)
+	}
+	for _, c := range peerCandidates(t, reg, regions, time.Now()) {
+		d.Candidates = append(d.Candidates, c)
+		if c.Class != "" {
+			continue
+		}
+		switch {
+		case len(cfg.Placement.Consider.Offices) > 0 && !contains(cfg.Placement.Consider.Offices, c.Office):
+			c.Class, c.Reason = "excluded", "not in consider.offices"
+		case len(j.Pin) > 0 && !contains(j.Pin, c.Office):
+			c.Class, c.Reason = "excluded", "the job is pinned elsewhere"
+		case neverHere(j, c.Region):
+			c.Class, c.Reason = "excluded", "never: scope "+j.Scope+" stays in its regions"
+		}
+	}
 	for _, pin := range j.Pin {
 		found := false
 		for _, c := range d.Candidates {
@@ -383,6 +462,10 @@ func resolve(j *offices.Job, reg *offices.Region) *Decision {
 	jb, _ := json.Marshal(j)
 	for _, c := range d.Candidates {
 		if c.Class != "" {
+			continue
+		}
+		if c.peer {
+			peerFilter(c, j, time.Now())
 			continue
 		}
 		out, err := askOffice(nil, "describe", c.Office, "--json")
@@ -444,6 +527,14 @@ func resolve(j *offices.Job, reg *offices.Region) *Decision {
 	if len(pass) > 0 {
 		d.Chosen = pass[0]
 	}
+	// A retry time already past is a stale hint (a peer's catalog, a lagging
+	// slot): booked as a retry it would spin whoever runs place --retry.
+	// The job retries on the next event or tick instead.
+	for _, c := range closed {
+		if c.RetryAfter != "" && !offices.Earlier(offices.Stamp(time.Now()), c.RetryAfter) {
+			c.RetryAfter = ""
+		}
+	}
 	if len(closed) > 0 {
 		d.Waiting = closed[0]
 		// The job retries at the earliest office's retry time; an office with
@@ -459,6 +550,92 @@ func resolve(j *offices.Job, reg *offices.Region) *Decision {
 		}
 	}
 	return d
+}
+
+// peerCandidates are the offices each considered peer published to this
+// region, from catalogs verified against the key this region pins for it.
+// A catalog that doesn't verify means no link: its offices are never
+// planned over. One that is missing or stale is a wait, not a setup gap.
+func peerCandidates(t offices.Transport, reg *offices.Region, regions []string, now time.Time) []*Candidate {
+	var out []*Candidate
+	for _, name := range regions {
+		if name == reg.Region {
+			continue
+		}
+		p := reg.Peers[name]
+		recs, err := t.Catalogs(name)
+		if err != nil || len(recs) == 0 {
+			why := "no catalog from region " + name + " yet"
+			if err != nil {
+				why = "region " + name + "'s catalogs can't be read: " + err.Error()
+			}
+			out = append(out, &Candidate{Office: "*", Region: name, Class: "unreachable", Reason: why})
+			continue
+		}
+		for _, rec := range recs {
+			doc, err := offices.OpenCatalog(rec.Body, p.Key, name, reg.Region, now)
+			switch {
+			case errors.Is(err, offices.ErrFuture):
+				out = append(out, &Candidate{Office: "*", Machine: rec.Machine, Region: name, Class: "unreachable",
+					Reason: strings.TrimPrefix(err.Error(), offices.ErrFuture.Error()+": ") + ": refused until it isn't"})
+				continue
+			case errors.Is(err, offices.ErrStale):
+				out = append(out, &Candidate{Office: "*", Machine: rec.Machine, Region: name, Class: "unreachable",
+					Reason: fmt.Sprintf("region %s's catalog for machine %s is stale (valid until %s)", name, rec.Machine, doc.ValidUntil)})
+				continue
+			case err != nil:
+				out = append(out, &Candidate{Office: "*", Machine: rec.Machine, Region: name, Class: "excluded",
+					Reason: strings.TrimPrefix(err.Error(), offices.ErrNoLink.Error()+": ") + ": no link"})
+				continue
+			}
+			for _, cat := range doc.Offices {
+				out = append(out, &Candidate{Office: cat.Office, Machine: cat.Machine, Region: name, Running: cat.Running,
+					Owner: strings.Join(cat.Owner, ","), cat: cat, peer: true, vocab: doc.Vocab.Region(name), addr: p.Address})
+			}
+		}
+	}
+	return out
+}
+
+// peerFilter is the resolver's filter for a peer's office, from its
+// catalog alone: the holdings, the peer region's vocabulary and
+// max_expires, the owner's state and its office-wide verdicts. There is no
+// probe across regions; the office judges its rules (and its peer rules)
+// when the placement arrives.
+func peerFilter(c *Candidate, j *offices.Job, now time.Time) {
+	cat := c.cat
+	why := offices.Mismatch(j, cat, c.vocab)
+	if max := c.vocab.MaxExpires; max != "" {
+		if exp, err := time.Parse(time.RFC3339, j.Expires); err == nil && exp.Sub(now) > offices.Duration(max, 24*time.Hour) {
+			why = append(why, fmt.Sprintf("expires is past region %s's max_expires (%s)", c.Region, max))
+		}
+	}
+	if len(why) > 0 {
+		c.Class, c.Reason = "holdings", strings.Join(why, "; ")
+		return
+	}
+	// The owner's state as the peer published it, on the peer's clock: one
+	// dated ahead of ours can't be weighed, so the office isn't planned
+	// over until it can be (a wait, like a catalog dated in the future).
+	if st := cat.State; st != nil && st.At != "" {
+		if at, err := time.Parse(time.RFC3339Nano, st.At); err != nil || at.Sub(now) > offices.ClockSkew {
+			c.Class, c.Reason = "unreachable", "its owner's state is dated ahead of this clock"
+			return
+		}
+	}
+	if st := cat.State; st != nil && st.Applies(j, now) {
+		if st.State == "closed" {
+			c.Class, c.Reason, c.RetryAfter = "closed", "closed by its owner", st.Until
+		}
+		return // an owner's open: the office decides the rest
+	}
+	for _, p := range cat.Verdicts {
+		vu, err := time.Parse(time.RFC3339Nano, p.ValidUntil)
+		if p.Verdict == "closed" && err == nil && now.Before(vu) {
+			c.Class, c.Reason, c.RetryAfter = "closed", p.Reason, p.RetryAfter
+			return
+		}
+	}
 }
 
 func neverHere(j *offices.Job, region string) bool {
@@ -603,17 +780,32 @@ func placeJob(j *offices.Job, reg *offices.Region) outcome {
 	}
 	if c := d.Chosen; c != nil {
 		j.Office, j.Machine, j.Region = c.Office, c.Machine, c.Region
-		j.SignedAt = offices.Stamp(time.Now()) // the canonical bytes are fixed here; signing them lands with regions
+		// The canonical bytes are fixed here, and signed by the asker; a
+		// placement into a peer region is sealed by this region too.
+		j.SignedAt = offices.Stamp(time.Now())
+		block := j.Encode()
+		sig, err := offices.SignWith(requesterKey(j.AskedBy), offices.NSPlacement, block)
+		if err != nil {
+			die("signing %s as %s: %v", j.ID, j.AskedBy, err)
+		}
+		stages := map[string]string{"resolve": j.ResolveAt, "resolved": resolvedAt, "sign": j.SignedAt}
+		var seal []byte
+		if c.Region != reg.Region {
+			stages["seal"] = offices.Stamp(time.Now())
+			if seal, err = offices.SignWith(regionKey(reg), offices.NSSeal, block); err != nil {
+				die("sealing %s for region %s: %v", j.ID, c.Region, err)
+			}
+		}
 		t, err := offices.NewTransport(cfg.Placement.Transport, placeLayout, 0)
 		if err != nil {
 			die("%v", err)
 		}
-		j.SentAt = offices.Stamp(time.Now())
-		if err := t.Send(c.cat.Box, j.ID, j.Encode()); err != nil {
-			placeLog(map[string]any{"event": "send-failed", "job": j.ID, "office": c.Office, "why": err.Error()})
+		stages["send"] = offices.Stamp(time.Now())
+		if err := t.Send(c.addr, c.cat.Box, j.ID, offices.SealLetter(block, sig, seal)); err != nil {
+			placeLog(map[string]any{"event": "send-failed", "job": j.ID, "office": c.Office, "region": c.Region, "why": err.Error()})
 			die("placing %s into %s: %v", j.ID, c.Office, err)
 		}
-		sentDone := offices.Stamp(time.Now())
+		stages["sent"] = offices.Stamp(time.Now())
 		var skipped []map[string]string
 		for _, x := range filter {
 			if x.Class != "" {
@@ -631,7 +823,6 @@ func placeJob(j *offices.Job, reg *offices.Region) outcome {
 			}
 			why = fmt.Sprintf("first of %s by %s", strings.Join(d.Ranking, ", "), strings.Join(crit, ", "))
 		}
-		stages := map[string]string{"resolve": j.ResolveAt, "resolved": resolvedAt, "sign": j.SignedAt, "send": j.SentAt, "sent": sentDone}
 		placeLog(map[string]any{"event": "placed", "job": j.ID, "kind": j.Kind, "asked_by": j.AskedBy, "office": c.Office,
 			"machine": c.Machine, "region": c.Region, "why": why, "candidates": filter, "ranking": d.Ranking, "stages": stages})
 		dropQueued(j.ID)
@@ -661,6 +852,12 @@ func placeJob(j *offices.Job, reg *offices.Region) outcome {
 	}
 	q.Job, q.Filter, q.RetryAfter = j, filter, d.RetryAfter
 	waitingFor := "no office answers"
+	for _, c := range filter {
+		if c.Class == "unreachable" && !strings.HasPrefix(c.Reason, "on machine") {
+			waitingFor += " (" + c.Reason + ")" // the first that might, and why it doesn't
+			break
+		}
+	}
 	if d.Waiting != nil {
 		waitingFor = d.Waiting.Office + ": " + d.Waiting.Reason
 	}
@@ -714,6 +911,7 @@ func cmdPlace(argv []string) {
 	j, _ := parseJob(argv, false)
 	reg := placementSetup()
 	finishJob(j, reg)
+	requesterKey(j.AskedBy) // no key, no placement: say so before anything waits
 	o := placeJob(j, reg)
 	printLine(o.line)
 	os.Exit(o.code)
@@ -729,6 +927,7 @@ func placeFromDispatch(name string, argv []string) {
 	j.Name = name
 	reg := placementSetup()
 	finishJob(j, reg)
+	requesterKey(j.AskedBy)
 	o := placeJob(j, reg)
 	printLine(o.line)
 	os.Exit(o.code)
@@ -811,6 +1010,73 @@ func cmdQueue(argv []string) {
 			w = q.WaitingFor.Office + ": " + q.WaitingFor.Reason
 		}
 		fmt.Printf("%s  %s  asked by %s  waiting for %s%s\n", q.Job.ID, q.Job.Kind, q.Job.AskedBy, w, optStr(", retry after ", q.RetryAfter))
+	}
+}
+
+// cmdPeers shows each declared peer: the key pinned for it, and what its
+// verified catalogs offer this region. A catalog that doesn't verify is
+// shown as no link, and its offices aren't listed.
+func cmdPeers(argv []string) {
+	asJSON := false
+	for _, a := range argv {
+		if a != "--json" {
+			die("peers: unknown option %s", a)
+		}
+		asJSON = true
+	}
+	reg := placementSetup()
+	t, err := offices.NewTransport(cfg.Placement.Transport, placeLayout, 0)
+	if err != nil {
+		die("%v", err)
+	}
+	type row struct {
+		Peer       string   `json:"peer"`
+		Address    string   `json:"address"`
+		Key        string   `json:"key"`
+		Considered bool     `json:"considered"`
+		MayPlace   []string `json:"may_place"`
+		Offices    []string `json:"offices"`
+		Problems   []string `json:"problems"`
+	}
+	names := make([]string, 0, len(reg.Peers))
+	for n := range reg.Peers {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	rows := []row{}
+	for _, n := range names {
+		p := reg.Peers[n]
+		r := row{Peer: n, Address: p.Address, Considered: contains(cfg.Placement.Consider.Regions, n),
+			MayPlace: append([]string{}, p.MayPlace...), Offices: []string{}, Problems: []string{}}
+		if k, err := offices.ParsePublicKey(p.Key); err == nil {
+			r.Key = k.Fingerprint()
+		} else {
+			r.Problems = append(r.Problems, "its pinned key isn't usable: "+err.Error())
+		}
+		for _, c := range peerCandidates(t, reg, []string{n}, time.Now()) {
+			if c.Class != "" {
+				r.Problems = append(r.Problems, c.Reason)
+			} else {
+				r.Offices = append(r.Offices, c.Office)
+			}
+		}
+		rows = append(rows, r)
+	}
+	if asJSON {
+		printLine(rows)
+		return
+	}
+	for _, r := range rows {
+		state := "considered"
+		if !r.Considered {
+			state = "not in consider.regions"
+		}
+		fmt.Printf("%s  %s  key %s  (%s)\n", r.Peer, r.Address, r.Key, state)
+		fmt.Printf("  it may place into: %s\n", strings.Join(r.MayPlace, ", "))
+		fmt.Printf("  it publishes to us: %s\n", strings.Join(r.Offices, ", "))
+		for _, p := range r.Problems {
+			fmt.Printf("  ! %s\n", p)
+		}
 	}
 }
 

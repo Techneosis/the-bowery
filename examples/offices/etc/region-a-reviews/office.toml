@@ -12,7 +12,7 @@ kinds    = ["review"]
 profile  = "reviewer"
 surfaces = ["reviewer"]
 
-signers = "signers"          # who may place here: allowed-signers lines, principal first
+signers = "signers"          # who may place here: ssh-keygen allowed_signers lines (a peer's as name@region)
 
 [holdings]
 tools = ["git"]

@@ -1,1 +1,2 @@
 alice ssh-ed25519 AAAA… alice
+bob@region-b ssh-ed25519 AAAA… bob, of the peer region-b

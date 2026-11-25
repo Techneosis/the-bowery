@@ -58,6 +58,11 @@ identity_env = "BOWERY_AS"
 # transport = "dir"
 # The office host to ask. Default: office, on PATH.
 # office_command = "office"
+# The private keys placements are signed with, by asker. Default for the
+# invoking user's own: ~/.ssh/id_ed25519.
+# keys = { alice = "~/.ssh/id_ed25519", manager-1 = "~/.config/bowery/keys/manager-1" }
+# This region's private key: seals a placement sent to a peer region.
+# region_key = "~/.config/bowery/keys/region-a"
 
 # Defaults for one job kind.
 # [placement.kinds.review]

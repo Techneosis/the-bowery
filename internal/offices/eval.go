@@ -111,6 +111,36 @@ func (e *Evaluator) Instances() []Instance {
 	return all
 }
 
+// InstancesFor are the instances that judge one job: the office's, plus,
+// for a placement from another region, the rules that region's peer entry
+// says every placement from it must also pass (spec §3.1, §6).
+func (e *Evaluator) InstancesFor(job *Job) []Instance {
+	all := e.Instances()
+	if job != nil && job.From != "" && job.From != e.C.Region.Region {
+		if p, ok := e.C.Region.Peers[job.From]; ok {
+			all = append(all, p.Rules...)
+		}
+	}
+	return all
+}
+
+// PeerInstances are every peer's rules that apply to this office, for the
+// install checks.
+func (e *Evaluator) PeerInstances() []Instance {
+	var all []Instance
+	names := make([]string, 0, len(e.C.Region.Peers))
+	for n := range e.C.Region.Peers {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		if p := e.C.Region.Peers[n]; contains(p.MayPlace, e.C.Office.Name) {
+			all = append(all, p.Rules...)
+		}
+	}
+	return all
+}
+
 func (e *Evaluator) timeoutFor(in Instance) time.Duration {
 	if in.Timeout != "" {
 		return Duration(in.Timeout, 2*time.Second)
@@ -123,7 +153,7 @@ func (e *Evaluator) timeoutFor(in Instance) time.Duration {
 // closed, since an unlogged verdict must not admit anything.
 func (e *Evaluator) Evaluate(phase string, job *Job) (*Result, error) {
 	now := e.Clock().UTC()
-	insts := e.Instances()
+	insts := e.InstancesFor(job)
 	names := map[string]int{}
 	for _, in := range insts {
 		names[in.Name]++
@@ -148,6 +178,15 @@ func (e *Evaluator) Evaluate(phase string, job *Job) (*Result, error) {
 		if r != nil {
 			res.Instances = append(res.Instances, *r)
 		}
+	}
+	// A job from another region holds only while the link does: the peer
+	// entry, its may_place and its pinned key are read again every time,
+	// so revoking is one edit (spec §6). Like an integrity failure, no
+	// owner's open overrides a link that is gone.
+	if why := e.C.PeerLink(job); why != "" {
+		in := Instance{Name: "peer-link", Plugin: "core", source: "peer"}
+		res.Instances = append(res.Instances, InstanceResult{Instance: in, Name: in.Name, Source: "peer", Plugin: "core",
+			Contract: Contract, Integrity: true, Verdict: Verdict{Verdict: "closed", Reason: why}})
 	}
 	closer := combine(res, e.C.Office.Rules.Default)
 	st, err := ReadState(e.C.L, e.C.Office.Name)
@@ -583,7 +622,7 @@ func (e *Evaluator) request(phase string, in Instance, cfg any, job *Job, d *Des
 	if job != nil {
 		jobV = map[string]any{
 			"id": job.ID, "kind": job.Kind, "scope": job.Scope, "area": job.Area, "asked_by": job.AskedBy,
-			"signer":   map[string]any{"principal": job.AskedBy, "region": e.C.Region.Region},
+			"signer":   map[string]any{"principal": job.AskedBy, "region": jobRegion(job, e.C.Region.Region)},
 			"priority": job.Priority, "needs": job.Needs, "effects": nonNil(job.Effects), "surface": job.Surface,
 			"profile": job.Profile, "repo": job.Repo, "expires": job.Expires, "signed_at": job.SignedAt,
 			"tags": nonNilMap(job.Tags),
@@ -623,6 +662,14 @@ func (e *Evaluator) request(phase string, in Instance, cfg any, job *Job, d *Des
 		},
 		"clock": map[string]any{"now": now.Format(time.RFC3339), "timezone": e.C.Region.Timezone},
 	}
+}
+
+// jobRegion is the requester's region: the job's from, else the office's.
+func jobRegion(j *Job, own string) string {
+	if j.From != "" {
+		return j.From
+	}
+	return own
 }
 
 func nonNil(xs []string) []string {

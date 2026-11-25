@@ -3,7 +3,7 @@
 region   = "region-a"
 owner    = "alice"
 timezone = "Europe/Lisbon"
-key      = "ssh-ed25519 AAAA… region-a"     # read, not yet used: signatures come with regions
+key      = "ssh-ed25519 AAAA… region-a"     # the region's public key; it seals placements to peers and signs catalogs
 offices  = [{ name = "region-a-reviews", machine = "box-1" }]
 
 priorities       = ["high", "normal", "low"]   # highest first: the order waiting jobs retry in
@@ -22,6 +22,20 @@ box      = "office-{name}"   # the office's inbox
 rule_timeout = "2s"          # how long a rule may take to answer
 retry_tick   = "10m"         # how often a waiting placement is judged again without an event
 # rule_default, on_closed and interval: defaults for each office's [rules]
+
+# A peer region (both files must declare each other). What it may do *here*:
+# the offices it may place into, and rules every placement from it must also
+# pass. address is the transport's: for "dir", the peer's var directory.
+[peers.region-b]
+address   = "/var/lib/offices-region-b"
+key       = "ssh-ed25519 AAAA… region-b"   # pinned: a seal or catalog by any other key is no link
+may_place = ["region-a-reviews"]
+may_view  = []
+[[peers.region-b.rules]]
+name   = "region-b-hours"
+plugin = "hours"
+[peers.region-b.rules.config]
+windows = ["Mon..Fri 18:00-23:00"]
 
 # Rule instances every office in the region carries:
 # [[defaults.rules]]

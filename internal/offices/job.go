@@ -46,11 +46,23 @@ type Job struct {
 	Office  string `json:"office,omitempty"`
 	Machine string `json:"machine,omitempty"`
 	Region  string `json:"region,omitempty"`
+	// From is the requester's region: the office's own, or a peer's, whose
+	// seal the letter must then carry.
+	From string `json:"from,omitempty"`
 
 	// Stage times, for the latency record: when the resolver started on it,
 	// and when the placement was written to the office's box.
 	ResolveAt string `json:"resolve_at,omitempty"`
-	SentAt    string `json:"sent_at,omitempty"`
+	// SentAt was the send time in an M1 block. A signed block can't hold
+	// it (the bytes are fixed before they're sent), so the office now reads
+	// the send time from the transport; old blocks still decode.
+	SentAt string `json:"sent_at,omitempty"`
+
+	// What the office verified: the requester's key and, for a peer's
+	// placement, the key that sealed it. Never encoded; set only by the
+	// checks themselves.
+	signer *PublicKey
+	seal   *PublicKey
 }
 
 var (
@@ -70,12 +82,15 @@ func (j *Job) Validate() error {
 	if j.AskedBy == "" {
 		return fmt.Errorf("a job needs asked_by")
 	}
-	if strings.Contains(j.AskedBy, "/") {
-		return fmt.Errorf("asked_by %q: a principal's name has no slash", j.AskedBy)
+	if strings.ContainsAny(j.AskedBy, "/@") {
+		return fmt.Errorf("asked_by %q: a principal's name has no slash or @ (its region is from)", j.AskedBy)
+	}
+	if strings.ContainsAny(j.From, "/@") {
+		return fmt.Errorf("from %q: a region's name has no slash or @", j.From)
 	}
 	single := map[string]string{"kind": j.Kind, "asked_by": j.AskedBy, "scope": j.Scope, "area": j.Area,
 		"priority": j.Priority, "surface": j.Surface, "profile": j.Profile, "repo": j.Repo, "branch": j.Branch,
-		"base": j.Base, "office": j.Office, "machine": j.Machine, "region": j.Region, "name": j.Name,
+		"base": j.Base, "office": j.Office, "machine": j.Machine, "region": j.Region, "from": j.From, "name": j.Name,
 		"needs.repo": j.Needs.Repo, "needs.repo_mode": j.Needs.RepoMode}
 	for k, v := range single {
 		if v != "" && !LabelRE.MatchString(v) {
@@ -115,7 +130,8 @@ func (j *Job) Validate() error {
 const fenceOpen, fenceClose = "```placement", "```"
 
 // Encode writes a placement as one fenced block of `key = "value"` lines,
-// sorted by key: the canonical bytes a signature (M3) will cover. Lists are
+// sorted by key: the canonical bytes the requester signs and, for a peer's
+// placement, its region seals. Lists are
 // comma-joined (their items are labels, which hold no comma); tags are
 // `tags.<key>`.
 func (j *Job) Encode() []byte {
@@ -151,6 +167,7 @@ func (j *Job) Encode() []byte {
 	set("office", j.Office)
 	set("machine", j.Machine)
 	set("region", j.Region)
+	set("from", j.From)
 	set("resolve_at", j.ResolveAt)
 	set("sent_at", j.SentAt)
 	for k, v := range j.Tags {
@@ -170,8 +187,13 @@ func (j *Job) Encode() []byte {
 	return []byte(b.String())
 }
 
-// Decode reads a placement block strictly: one fence, known keys, each once.
+// Decode reads a placement strictly: one fence, known keys, each once. It
+// takes a block or a whole letter (the block, then its signatures), and
+// reads only the block: the signatures are the office's to check.
 func Decode(b []byte) (*Job, error) {
+	if block, _, err := SplitLetter(b); err == nil {
+		b = block
+	}
 	lines := strings.Split(strings.TrimRight(string(b), "\n"), "\n")
 	if len(lines) < 2 || lines[0] != fenceOpen || lines[len(lines)-1] != fenceClose {
 		return nil, fmt.Errorf("not one placement block")
@@ -201,7 +223,7 @@ func Decode(b []byte) (*Job, error) {
 			"area": &j.Area, "priority": &j.Priority, "needs.repo": &j.Needs.Repo, "needs.repo_mode": &j.Needs.RepoMode,
 			"credit": &j.Credit, "surface": &j.Surface, "profile": &j.Profile, "repo": &j.Repo, "branch": &j.Branch,
 			"base": &j.Base, "expires": &j.Expires, "signed_at": &j.SignedAt, "prompt": &j.Prompt, "office": &j.Office,
-			"machine": &j.Machine, "region": &j.Region, "resolve_at": &j.ResolveAt, "sent_at": &j.SentAt}
+			"machine": &j.Machine, "region": &j.Region, "from": &j.From, "resolve_at": &j.ResolveAt, "sent_at": &j.SentAt}
 		switch {
 		case dst[k] != nil:
 			*dst[k] = v
@@ -342,8 +364,8 @@ func Mismatch(j *Job, c *Catalog, reg *Region) []string {
 			why = append(why, "effect "+e+" exceeds its own")
 		}
 	}
-	if len(c.Signers) > 0 && !contains(c.Signers, j.AskedBy) {
-		why = append(why, j.AskedBy+" isn't among its signers")
+	if who := SignerPrincipal(j, c.Region); len(c.Signers) > 0 && !contains(c.Signers, who) {
+		why = append(why, who+" isn't among its signers")
 	}
 	if j.Credit != "" && !contains(c.Authors, j.Credit) {
 		why = append(why, "credit isn't on its authors list")

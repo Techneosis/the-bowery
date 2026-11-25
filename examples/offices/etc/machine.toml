@@ -2,6 +2,7 @@
 machine   = "box-1"          # the office host runs only on the machine it names
 transport = "dir"            # the placement transport: boxes are directories under var/boxes
 recorder  = "offices-rec"    # root mode: the user that writes the decisions logs (via sudo)
+# region_key = "/usr/local/etc/offices/keys/region"   # the region's private key: office publish signs catalogs with it
 
 # An installed rule plugin. sha256 pins it: a plugin that changed since is a
 # failed rule, which closes the office.

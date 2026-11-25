@@ -7,8 +7,10 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/signal"
 	"os/user"
@@ -46,7 +48,10 @@ const usage = `office: the office host. Opens and closes offices, judges placeme
                                            the activity log and the decisions log, in time order
   office record <office>                   the recorder: append decision lines (stdin); root mode
                                            runs it as the machine file's recorder, through sudo
-  office check <office>                    the install checks: plugins, contracts, phases, schemas, tier
+  office check <office>                    the install checks: plugins, contracts, phases, schemas, tier,
+                                           signers, peers
+  office publish [--valid 10m] [--json]    publish this machine's catalog to each peer: only the
+                                           offices its may_place grants, signed with the region key
   office version
 
 --until takes an RFC 3339 time or a duration from now (90m, 24h).
@@ -112,6 +117,8 @@ func main() {
 		cmdLog(rest)
 	case "check":
 		cmdCheck(rest)
+	case "publish":
+		cmdPublish(rest)
 	default:
 		die("unknown command %s (office --help)", cmd)
 	}
@@ -720,11 +727,16 @@ func cmdCheck(args []string) {
 	ev := evaluator(c, "install")
 	var probs []string
 	seen := map[string]bool{}
-	for _, in := range ev.Instances() {
-		if seen[in.Name] {
-			probs = append(probs, fmt.Sprintf("instance %s: the name is used twice", in.Name))
+	own := ev.Instances()
+	for i, in := range append(own, ev.PeerInstances()...) {
+		if i < len(own) {
+			if seen[in.Name] {
+				probs = append(probs, fmt.Sprintf("instance %s: the name is used twice", in.Name))
+			}
+			seen[in.Name] = true
+		} else if seen[in.Name] {
+			probs = append(probs, fmt.Sprintf("peer rule %s: the name is one of the office's own instances", in.Name))
 		}
-		seen[in.Name] = true
 		if !offices.NameRE.MatchString(in.Name) {
 			probs = append(probs, fmt.Sprintf("instance %q: not a valid name", in.Name))
 		}
@@ -796,6 +808,34 @@ func cmdCheck(args []string) {
 			}
 		}
 	}
+	for _, sg := range o.SignerList {
+		if sg.Problem != "" {
+			probs = append(probs, fmt.Sprintf("signer %s: %s, so it can never sign a placement here", strings.Join(sg.Principals, ","), sg.Problem))
+		}
+	}
+	for name, p := range c.Region.Peers {
+		if !contains(p.MayPlace, o.Name) {
+			continue
+		}
+		if _, err := offices.ParsePublicKey(p.Key); err != nil {
+			probs = append(probs, fmt.Sprintf("peer %s: its pinned key isn't usable (%v), so there is no link", name, err))
+		}
+		if p.Address == "" {
+			probs = append(probs, fmt.Sprintf("peer %s: no address, so its askers can't be answered", name))
+		}
+	}
+	if c.Machine.RegionKey != "" {
+		k, err := offices.LoadPrivateKey(expandHome(c.Machine.RegionKey))
+		pin, perr := offices.ParsePublicKey(c.Region.Key)
+		switch {
+		case errors.Is(err, fs.ErrPermission):
+			// Not this checker's to read (the publisher's alone): fine.
+		case err != nil:
+			probs = append(probs, fmt.Sprintf("region_key: %v", err))
+		case perr != nil || !pin.Equal(k.Public):
+			probs = append(probs, fmt.Sprintf("region_key isn't region %s's key", c.Region.Region))
+		}
+	}
 	for _, s := range o.Surfaces {
 		if _, ok := c.Machine.Surfaces[s]; !ok {
 			probs = append(probs, fmt.Sprintf("surface %s has no command in the machine file", s))
@@ -827,4 +867,132 @@ func containsInt(xs []int, x int) bool {
 		}
 	}
 	return false
+}
+
+// ---------------------------------------------------------------- publish
+
+// cmdPublish is catalog exchange (spec §6): for each peer the region file
+// declares, this machine's offices that peer may place into, with their
+// holdings, state and office-wide verdicts, signed with the region's key
+// and delivered through the transport to the peer's address. A peer with
+// nothing granted gets an empty catalog, so narrowing reaches it on the
+// next publish. A peer no longer declared gets nothing.
+func cmdPublish(args []string) {
+	f := parse(args, []string{"--valid"}, []string{"--json"})
+	if f.office != "" {
+		die("publish takes no office: it publishes every office on this machine a peer may use")
+	}
+	valid := 10 * time.Minute
+	if v, ok := f.vals["--valid"]; ok {
+		d, err := time.ParseDuration(v)
+		if err != nil || d <= 0 {
+			die("--valid takes a duration (got %q)", v)
+		}
+		valid = d
+	}
+	reg, err := offices.LoadRegion(layout)
+	if err != nil {
+		die("%v", err)
+	}
+	m, err := offices.LoadMachine(layout)
+	if err != nil {
+		die("%v", err)
+	}
+	if here := offices.ThisMachine(); m.Machine != here {
+		die("%s says machine %q, and this is %q", layout.MachineFile(), m.Machine, here)
+	}
+	if m.RegionKey == "" {
+		die("%s has no region_key: publishing a catalog needs the region's private key on this machine", layout.MachineFile())
+	}
+	key, err := offices.LoadPrivateKey(expandHome(m.RegionKey))
+	if err != nil {
+		die("the region key: %v", err)
+	}
+	pin, err := offices.ParsePublicKey(reg.Key)
+	if err != nil || !pin.Equal(key.Public) {
+		die("region_key (%s) isn't region %s's key, as its region file says it", key.Public.Fingerprint(), reg.Region)
+	}
+	var all []*offices.Catalog
+	ents, err := os.ReadDir(layout.Etc)
+	if err != nil {
+		die("%v", err)
+	}
+	for _, e := range ents {
+		if e.IsDir() {
+			if _, err := os.Stat(layout.OfficeFile(e.Name())); err == nil {
+				all = append(all, catalog(load(e.Name())))
+			}
+		}
+	}
+	t, err := offices.NewTransport(m.Transport, layout, 0)
+	if err != nil {
+		die("%v", err)
+	}
+	peers := make([]string, 0, len(reg.Peers))
+	for n := range reg.Peers {
+		peers = append(peers, n)
+	}
+	sort.Strings(peers)
+	type sent struct {
+		Peer    string   `json:"peer"`
+		Offices []string `json:"offices"`
+		Error   string   `json:"error,omitempty"`
+	}
+	report := []sent{}
+	now := now().UTC() // OFFICE_NOW in dev mode: a skewed publisher, for the tests
+	failed := false
+	for _, n := range peers {
+		p := reg.Peers[n]
+		doc := &offices.CatalogDoc{Region: reg.Region, Machine: m.Machine, For: n, PublishedAt: offices.Stamp(now),
+			ValidUntil: offices.Stamp(now.Add(valid)), Offices: []*offices.Catalog{},
+			Vocab: offices.Vocab{Priorities: nonNilS(reg.Priorities), ReservedEffects: nonNilS(reg.ReservedEffects),
+				MaxExpires: reg.MaxExpires, Timezone: reg.Timezone}}
+		names := []string{}
+		for _, c := range all {
+			if contains(p.MayPlace, c.Office) {
+				doc.Offices = append(doc.Offices, c.ForPeer())
+				names = append(names, c.Office)
+			}
+		}
+		r := sent{Peer: n, Offices: names}
+		body, err := offices.SignCatalog(doc, key)
+		if err == nil {
+			err = t.Publish(p.Address, reg.Region, m.Machine, body)
+		}
+		if err != nil {
+			r.Error, failed = err.Error(), true
+		}
+		report = append(report, r)
+	}
+	if f.bools["--json"] {
+		printJSON(report)
+	} else {
+		for _, r := range report {
+			if r.Error != "" {
+				fmt.Printf("%-16s not published: %s\n", r.Peer, r.Error)
+			} else {
+				fmt.Printf("%-16s %d office(s)%s\n", r.Peer, len(r.Offices), opt(": ", strings.Join(r.Offices, ", ")))
+			}
+		}
+	}
+	if failed {
+		os.Exit(1)
+	}
+}
+
+func nonNilS(xs []string) []string {
+	if xs == nil {
+		return []string{}
+	}
+	return xs
+}
+
+// expandHome reads a leading ~/ as the invoking user's home.
+func expandHome(p string) string {
+	if strings.HasPrefix(p, "~/") {
+		if h, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(h, p[2:])
+		}
+	}
+	return p
 }
