@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+# scripts/ci-local [<commit>]: run the CI suite on a commit here and, in
+# parallel, on a second machine over ssh, before pushing it. A GitHub run
+# takes 12-16 minutes, pass or fail; this takes as long as the slower
+# machine's suite, and stops the other machine as soon as one fails.
+#
+#   BOWERY_CI_REMOTE       ssh target of the other machine (user@host), e.g. a
+#                          Mac for darwin-arm64 when this is linux-amd64.
+#                          Unset: this machine only, and it says so.
+#   BOWERY_CI_REMOTE_DIR   a clone of this repo there (default ~/src/the-bowery)
+#
+# Each side checks the commit out into a fresh, detached worktree (the clone
+# there is left as it is: its branch, its changes), runs the suite, and
+# removes the worktree. The commit reaches the other machine by a git push
+# over the same ssh, to refs/ci-local/<sha>, deleted afterwards, so nothing
+# needs to be pushed to GitHub first. The suite, on each side:
+#
+#   gofmt -l .  (prints nothing)      go vet ./...      go test ./...
+#   python3 -m unittest discover tests  (black-box: the binaries built fresh)
+#
+# Exit 0 when every side passed, 1 when one failed (its log's tail is
+# printed; full logs under $TMPDIR/ci-local.<sha>), 2 on a usage or setup
+# problem. The other machine's shell is a login shell (bash -lc), so its
+# toolchain is on PATH as it is for a person there.
+set -uo pipefail
+set -m  # each side in its own process group, so fail-fast stops all of it
+
+root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+rev=${1:-HEAD}
+sha=$(git -C "$root" rev-parse --verify --quiet "$rev^{commit}") || { echo "ci-local: no commit $rev" >&2; exit 2; }
+short=${sha:0:7}
+remote=${BOWERY_CI_REMOTE:-}
+rdir=${BOWERY_CI_REMOTE_DIR:-~/src/the-bowery}
+logs=${TMPDIR:-/tmp}/ci-local.$short
+mkdir -p "$logs"
+
+# The suite, as one script both sides run from inside their worktree.
+suite='set -uo pipefail
+step() { echo "== $*"; "$@" || { echo "ci-local: FAILED: $*"; exit 1; }; }
+unfmt=$(gofmt -l .); if [ -n "$unfmt" ]; then echo "ci-local: FAILED: gofmt -l . lists: $unfmt"; exit 1; fi
+step go vet ./...
+step go test -count=1 ./...
+unset BOWERY_BIN OFFICE_BIN HOURS_BIN
+step python3 -m unittest discover tests
+echo "ci-local: PASSED on $(go env GOOS)/$(go env GOARCH)"'
+
+run_here() {
+  local wt
+  wt=$(mktemp -d "${TMPDIR:-/tmp}/ci-local-wt.XXXXXX")
+  git -C "$root" worktree add -q --detach "$wt" "$sha" || return 2
+  (cd "$wt" && bash -c "$suite")
+  local rc=$?
+  git -C "$root" worktree remove --force "$wt" >/dev/null 2>&1
+  return $rc
+}
+
+run_there() {
+  local ref="refs/ci-local/$sha"
+  git -C "$root" push -q "$remote:$rdir" "$sha:$ref" || { echo "ci-local: couldn't push $short to $remote:$rdir"; return 2; }
+  local q
+  q=$(printf '%q' "$suite")
+  # shellcheck disable=SC2029  # expanded here on purpose: the sha, the dir, the suite
+  ssh -tt -o BatchMode=yes "$remote" "bash -lc $(printf '%q' "
+    cd $rdir || exit 2
+    wt=\$(mktemp -d \"\${TMPDIR:-/tmp}/ci-local-wt.XXXXXX\")
+    git worktree add -q --detach \"\$wt\" $sha || exit 2
+    (cd \"\$wt\" && bash -c $q); rc=\$?
+    git worktree remove --force \"\$wt\" >/dev/null 2>&1
+    git update-ref -d $ref
+    exit \$rc")"
+}
+
+names=(here) pids=()
+echo "ci-local: $short here ($(uname -sm)), log $logs/here.log"
+run_here >"$logs/here.log" 2>&1 &
+pids+=($!)
+if [ -n "$remote" ]; then
+  names+=(there)
+  echo "ci-local: $short on $remote, log $logs/there.log"
+  run_there >"$logs/there.log" 2>&1 &
+  pids+=($!)
+else
+  echo "ci-local: BOWERY_CI_REMOTE is unset: this machine only, not the other platform"
+fi
+
+# Fail fast: the first side to fail stops the rest.
+rc=0 left=${#pids[@]}
+while [ "$left" -gt 0 ]; do
+  wait -n -p done "${pids[@]}"; r=$?
+  left=$((left - 1))
+  for i in "${!pids[@]}"; do [ "${pids[$i]}" = "$done" ] && who=${names[$i]}; done
+  if [ "$r" -eq 0 ]; then
+    echo "ci-local: $who passed ($(grep -E '^Ran [0-9]+ tests' "$logs/$who.log" | tail -1))"
+  else
+    echo "ci-local: $who FAILED (exit $r); the tail of $logs/$who.log:"
+    tail -25 "$logs/$who.log" | sed 's/^/    /'
+    rc=1
+    for p in "${pids[@]}"; do kill -- "-$p" 2>/dev/null; done  # the other side, and its ssh (its tty hangs up there)
+    break
+  fi
+done
+wait 2>/dev/null
+exit $rc

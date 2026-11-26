@@ -103,7 +103,11 @@ class Peers(one_node.Bus):
     def kinds(self, out, producer):
         return [r["event"]["kind"] for r in self.records(out) if r["event"]["producer"] == producer]
 
-    def until(self, f, want, within=10):
+    # A failed call is retried from 1s doubling to 30s, so a peering that
+    # failed while its peer came up (slowly, on a loaded runner) may next try
+    # half a minute later: the default bound covers that ceiling and a call.
+    # Latency claims bound their own (a few seconds) where they're made.
+    def until(self, f, want, within=40):
         deadline = time.monotonic() + within
         got = None
         while time.monotonic() < deadline:
@@ -111,7 +115,8 @@ class Peers(one_node.Bus):
             if got == want:
                 return time.monotonic()
             time.sleep(0.05)
-        self.fail(f"got {got!r}, want {want!r}")
+        status = self.office("bus", "status", env={"OFFICE_BUS_AS": "alice"})
+        self.fail(f"got {got!r}, want {want!r}; region-a's bus status:\n{status.stdout}{status.stderr}")
 
     def a_has(self):
         return self.kinds(self.bus_ok("follow", "--once"), "region-b/bob")
