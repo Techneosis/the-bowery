@@ -187,11 +187,15 @@ class OnlyOverHTTP(OverHTTP, R.Regions):
                 time.sleep(0.4)  # the loop is back in its wait
                 self.b_place("--kind", "review", "--id", f"wk-{i}", code=0)
                 deadline = time.monotonic() + 10
-                while time.monotonic() < deadline and f"wk-{i}" not in self.started_ids():
+                launched = []
+                # The agent starts before the office logs its launch: wait
+                # for the log line, not the start.
+                while time.monotonic() < deadline and not launched:
+                    launched = [e for e in self.events(self.REVIEWS, "launched") if e["job"] == f"wk-{i}"]
                     time.sleep(0.02)
-                self.assertIn(f"wk-{i}", self.started_ids())
+                self.assertTrue(launched, f"wk-{i} was never launched")
                 b = self.b_place_log()[-1]["stages"]
-                a = [e for e in self.events(self.REVIEWS, "launched") if e["job"] == f"wk-{i}"][0]["stages"]
+                a = launched[0]["stages"]
                 gaps.append((stamp(a["delivered"]) - stamp(b["send"]), stamp(a["accepted"]) - stamp(b["send"])))
                 # Ended, so the next pass has no run phase to judge before
                 # it reads the inbox: what is measured is the hop and the wake.
