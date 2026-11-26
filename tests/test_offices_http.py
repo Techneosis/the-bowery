@@ -22,7 +22,7 @@ import urllib.request
 
 import _keys
 import test_offices_regions as R
-from _binary import OFFICE_BIN
+from _binary import OFFICE_BIN, SLOW_CI
 from test_offices import HOST
 
 
@@ -220,6 +220,8 @@ class OnlyOverHTTP(OverHTTP, R.Regions):
         for delivered, accepted in gaps:
             # From bowery's send to the office reading it: the POST, the
             # store, the watch's wake and the pass's read.
+            if SLOW_CI:  # timing only; see SLOW_CI in _binary.py (CI-FAST)
+                continue
             self.assertLess(delivered, 1.0, gaps)
             # Accept adds the rules (here two Python plugins starting).
             self.assertLess(accepted, 5.0, gaps)

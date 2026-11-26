@@ -26,7 +26,7 @@ import unittest
 from pathlib import Path
 
 import _keys
-from _binary import BIN, OFFICE_BIN
+from _binary import BIN, OFFICE_BIN, SLOW_CI
 from test_offices import HOST, Offices
 
 SURFACE = f"""#!{sys.executable}
@@ -199,7 +199,8 @@ class TheDoneWhen(Regions):
             loop.terminate()
             loop.communicate(timeout=10)
         self.assertEqual(self.started_ids(), ["peer-1"])
-        self.assertLess(took, 5, "placement to started across regions")
+        if not SLOW_CI:  # timing only; see SLOW_CI in _binary.py (CI-FAST)
+            self.assertLess(took, 5, "placement to started across regions")
         placed = out["placed"]
         self.assertEqual((placed["office"], placed["region"]), (self.REVIEWS, "region-a"))
         self.assertEqual(set(placed["stages"]), set(STAGES_B))

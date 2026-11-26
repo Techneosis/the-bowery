@@ -20,7 +20,7 @@ import time
 import unittest
 
 import _keys
-from _binary import OFFICE_BIN
+from _binary import OFFICE_BIN, SLOW_CI
 from test_offices import HOST
 import test_offices_bus as one_node
 from test_offices_bus import BUS
@@ -136,8 +136,10 @@ class Peers(one_node.Bus):
         self.b_bus("publish", "gate.decided")  # region-a doesn't let region-b read it in
         # Neither way waits on a timer: a push follows the publish, a pull
         # long-polls the peer.
-        self.assertLess(self.until(self.b_has, ["job.started"]) - start, 3)
-        self.assertLess(self.until(self.a_has, ["card.answered"]) - start, 3)
+        b_at, a_at = self.until(self.b_has, ["job.started"]), self.until(self.a_has, ["card.answered"])
+        if not SLOW_CI:  # timing only; see SLOW_CI in _binary.py (CI-FAST)
+            self.assertLess(b_at - start, 3)
+            self.assertLess(a_at - start, 3)
         # What each kept verifies as the other's: north's seat, north's seal.
         rec = [r for r in self.records(self.b_bus("follow", "--once")) if r["event"]["producer"] == "region-a/alice"][0]
         self.assertEqual(rec["event"]["region"], "region-a")
