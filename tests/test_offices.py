@@ -153,7 +153,7 @@ class Offices(unittest.TestCase):
             box      = "office-{{name}}"
 
             [defaults]
-            rule_timeout = "1s"
+            rule_timeout = "10s"  # python rules start slowly on a loaded runner; a test of a timeout sets its own (CI-FAST)
             retry_tick   = "1s"
             """) + extra)
 
