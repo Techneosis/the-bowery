@@ -1,5 +1,11 @@
 name: test
-on: [push, pull_request]
+on:
+  push:
+    # A v* tag is release.yml's: its verify runs this suite on every target
+    # and gates the publish, so a test run on the tag would only repeat it.
+    tags-ignore: ["v*"]
+    branches: ["**"]
+  pull_request:
 
 # A newer push to the same branch supersedes the run before it.
 concurrency:
@@ -8,6 +14,9 @@ concurrency:
 
 jobs:
   test:
+    # A release's own merge to main ("[release]" in its message) is tagged at
+    # once, and the tag's verify runs this suite on the same commit.
+    if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[release]')) }}
     strategy:
       # The first failure is the answer: stop the other platform's run.
       fail-fast: true
