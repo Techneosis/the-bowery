@@ -287,9 +287,11 @@ class StateFile(Run):
 
     def test_stale_by_mtime_or_by_its_own_timestamp_whichever_is_older(self):
         self.office_with(self.gate_rule())
-        self.set_gate(True, age=59)
+        # The bound is 60s. Ages well either side of it (not 59 and 61): the
+        # probe itself takes time, over a second on a loaded CI runner.
+        self.set_gate(True, age=30)
         self.assertEqual(self.probe_reason()["verdict"], "open")
-        self.set_gate(True, age=61)
+        self.set_gate(True, age=90)
         self.assertIn("stale", self.probe_reason()["reason"])
         # Touched by something, but its writer's own clock stopped.
         self.set_gate(True, age=0, at_age=300)

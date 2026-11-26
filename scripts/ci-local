@@ -16,7 +16,7 @@
 # needs to be pushed to GitHub first. The suite, on each side:
 #
 #   gofmt -l .  (prints nothing)      go vet ./...      go test ./...
-#   python3 -m unittest discover tests  (black-box: the binaries built fresh)
+#   scripts/test-suite  (the black-box suite in parallel, the binaries built fresh)
 #
 # Exit 0 when every side passed, 1 when one failed (its log's tail is
 # printed; full logs under $TMPDIR/ci-local.<sha>), 2 on a usage or setup
@@ -41,7 +41,7 @@ unfmt=$(gofmt -l .); if [ -n "$unfmt" ]; then echo "ci-local: FAILED: gofmt -l .
 step go vet ./...
 step go test -count=1 ./...
 unset BOWERY_BIN OFFICE_BIN HOURS_BIN
-step python3 -m unittest discover tests
+step scripts/test-suite
 echo "ci-local: PASSED on $(go env GOOS)/$(go env GOARCH)"'
 
 run_here() {

@@ -64,7 +64,7 @@ jobs:
           tar -xzf dist/bowery-${{ matrix.platform }}.tar.gz -C "$RUNNER_TEMP"
           "$RUNNER_TEMP/bowery-${{ matrix.platform }}/build/bowery" version | tee /dev/stderr | grep -qF "$VERSION"
       - name: the conformance suite, against the released binary
-        run: BOWERY_BIN="$RUNNER_TEMP/bowery-${{ matrix.platform }}/build/bowery" python -m unittest discover -v tests
+        run: BOWERY_BIN="$RUNNER_TEMP/bowery-${{ matrix.platform }}/build/bowery" scripts/test-suite
       # The one-liner, end to end, from these archives: download, checksum,
       # unpack, install, upgrade, uninstall, in a throwaway HOME.
       - name: install the way a user does

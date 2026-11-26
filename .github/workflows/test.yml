@@ -37,7 +37,7 @@ jobs:
       - run: test -z "$(gofmt -l .)"
       - run: go vet ./...
       - run: go test ./...
-      - run: CGO_ENABLED=0 go build -trimpath -o build/bowery ./cmd/bowery
-      # Black-box: the built binary through its CLI, against the fake herdr
-      # and ssh in tests/fakes/ (no herdr needed on the runner).
-      - run: BOWERY_BIN=$PWD/build/bowery python -m unittest discover -v tests
+      # Black-box: the binaries (built once) through their CLIs, against the
+      # fake herdr and ssh in tests/fakes/ (no herdr needed on the runner),
+      # the tests dealt across parallel processes.
+      - run: scripts/test-suite

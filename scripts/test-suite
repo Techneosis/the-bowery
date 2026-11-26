@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+# scripts/test-suite [-j N] [-v]: the black-box python suite, in parallel.
+#
+# One after another the suite takes about 9 minutes, most of it tests waiting
+# on real timers (a backstop, a retry, a slow agent), not the CPU. So every
+# test is dealt, round-robin, to one of N processes (default: four per
+# CPU; about a minute on 4 CPUs, against 9 minutes in one), each running
+# its share with `python3 -m unittest <ids>`. The binaries are built once
+# first (or taken from BOWERY_BIN, as a release's
+# verify does), so the processes share nothing else: each test makes its own
+# temp folders and ports.
+#
+# Exit 0 when every shard passed, 1 when one failed (its log is printed),
+# 2 on a setup problem. Logs: $TMPDIR/test-suite.<pid>/shard-<n>.log
+set -uo pipefail
+
+root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+cpus=$( (command -v nproc >/dev/null && nproc) || sysctl -n hw.ncpu 2>/dev/null || echo 2)
+jobs=$((cpus * 4)) verbose=
+while [ $# -gt 0 ]; do
+  case $1 in
+    -j) jobs=$2; shift 2 ;;
+    -v) verbose=-v; shift ;;
+    *) echo "usage: scripts/test-suite [-j N] [-v]" >&2; exit 2 ;;
+  esac
+done
+cd "$root/tests" || exit 2
+py=$(command -v python3 || command -v python) || { echo "test-suite: no python3" >&2; exit 2; }
+
+logs=${TMPDIR:-/tmp}/test-suite.$$
+mkdir -p "$logs"
+if [ -z "${BOWERY_BIN:-}" ]; then
+  bin=$(mktemp -d "${TMPDIR:-/tmp}/test-suite-bin.XXXXXX")
+  trap 'rm -rf "$bin"' EXIT
+  for pair in bowery:./cmd/bowery office:./cmd/office rules/hours:./cmd/rules/hours; do
+    mkdir -p "$bin/$(dirname "${pair%%:*}")"
+    (cd "$root" && CGO_ENABLED=0 go build -o "$bin/${pair%%:*}" "${pair#*:}") \
+      || { echo "test-suite: go build ${pair#*:} failed" >&2; exit 2; }
+  done
+  export BOWERY_BIN=$bin/bowery
+fi
+
+# Every test id, dealt to the shards in turn, so each module's tests spread
+# across all of them.
+"$py" - "$jobs" "$logs" <<'PY' || { echo "test-suite: couldn't list the tests" >&2; exit 2; }
+import sys, unittest
+jobs, logs = int(sys.argv[1]), sys.argv[2]
+def ids(s):
+    for t in s:
+        if isinstance(t, unittest.TestSuite):
+            yield from ids(t)
+        else:
+            yield t.id()
+all_ids = list(ids(unittest.defaultTestLoader.discover(".")))
+if any(i.startswith("unittest.loader._FailedTest") for i in all_ids):
+    sys.exit("a test module doesn't import: " + ", ".join(i for i in all_ids if "_FailedTest" in i))
+for n in range(jobs):
+    with open(f"{logs}/shard-{n}.ids", "w") as f:
+        f.write("\n".join(all_ids[n::jobs]) + "\n")
+print(f"test-suite: {len(all_ids)} tests in {jobs} shards", file=sys.stderr)
+PY
+
+start=$(date +%s)
+pids=()
+for ids in "$logs"/shard-*.ids; do
+  n=$(basename "$ids" .ids)
+  [ -s "$ids" ] && grep -q . "$ids" || continue
+  # shellcheck disable=SC2046  # one id per line, no spaces in an id
+  "$py" -m unittest $verbose $(cat "$ids") >"$logs/$n.log" 2>&1 &
+  pids+=($!)
+done
+rc=0
+for p in "${pids[@]}"; do wait "$p" || rc=1; done
+
+total=$(cat "$logs"/shard-*.log | grep -E '^Ran [0-9]+ tests' | awk '{n += $2} END {print n + 0}')
+for f in "$logs"/shard-*.log; do
+  if ! tail -3 "$f" | grep -qE '^OK( \(.*\))?$'; then
+    echo; echo "== $(basename "$f" .log) FAILED:"; grep -E '^(FAIL|ERROR):' "$f"; tail -40 "$f"; rc=1
+  fi
+done
+echo "test-suite: ran $total tests in ${#pids[@]} processes, $(( $(date +%s) - start ))s: $([ $rc -eq 0 ] && echo OK || echo FAILED)"
+exit $rc
