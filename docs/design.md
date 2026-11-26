@@ -827,6 +827,43 @@ peer rules. Rule plugins run as whoever runs the evaluation (the office's
 user, in the pull job), and the resume re-check is the pull job's, not a
 wrapper's.
 
+## The bus
+
+Offices exchange placements today; the bus is for everything else they
+want to tell each other as it happens (a job started, a card was
+answered), without anyone polling. Its core is `pkg/bus`, which other
+programs import. The node that serves it, the topic rules and replication
+between regions come in later pieces; this is what they build on.
+
+- **One log per producer.** A producer is a region's seat
+  (`<region>/<seat>`) or a service with a bare name. It numbers its own
+  events with `seq`, strictly increasing, with gaps allowed (a service
+  can number them by its own table's ids, where not every row goes out).
+  There's no order across producers. An event that follows from another
+  names it in `cause`.
+- **Signed and sealed, like a placement.** Each event is signed by its
+  producer (namespace `bus-event`) and sealed by its region
+  (`bus-region`) over its canonical bytes: compact JSON, fields in a fixed
+  order, free-form parts with sorted keys, the time in UTC. Neither
+  signature can pass for the other, or for a placement or a catalog. A
+  region's seat must be sealed by its own region. Both keys must be pinned
+  by the reader. The signatures are `ssh-keygen -Y` signatures, so an
+  event can be checked by hand.
+- **A reader's position is a vector cursor**: one seq per producer,
+  written `producer=seq,producer=seq` (sorted), so it fits in an SSE
+  `Last-Event-ID`. A producer the cursor doesn't name is read from its
+  start.
+- **The log** keeps one append-only file per producer, one record per
+  line. It verifies every record before appending it. A resend of a record
+  it has is dropped quietly, so a producer that crashed between writing
+  and sending just sends again. A different event at a seq it has is a
+  fork, and one older than the head that it doesn't have is refused. Both
+  are errors. A torn last line from a crash is cut off when the log opens,
+  and any other bad line means the log won't open. Several handles may
+  share a directory: each producer's file is locked while it's read or
+  written, and a handle catches up with the others before it decides
+  anything.
+
 ## The worktree-group hazard
 
 `herdr worktree create` groups the new workspace under a primary workspace on

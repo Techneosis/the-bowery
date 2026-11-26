@@ -6,6 +6,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -262,15 +263,16 @@ func decodeStrict(path string, v any) error {
 	return nil
 }
 
-// rootMode is set by LoadRegion and friends from the layout, so the
-// ownership checks know whether to run.
-var rootMode = true
+// devMode is set by LoadRegion and friends from the layout, so the
+// ownership checks know whether to run (they run unless it's set). It's
+// atomic because `office serve` loads the region on every request.
+var devMode atomic.Bool
 
 // checkRootOwned: in root mode every config file and plugin is root's and
 // writable by nobody else, and so is every directory above it, up to /.
 // Dev mode skips it (and says so).
 func checkRootOwned(path string) error {
-	if !rootMode {
+	if devMode.Load() {
 		return nil
 	}
 	err := chainProblem(path, "/", statOwner, func(uid uint32) bool { return uid == 0 })
@@ -281,7 +283,7 @@ func checkRootOwned(path string) error {
 }
 
 func LoadRegion(l Layout) (*Region, error) {
-	rootMode = !l.Dev
+	devMode.Store(l.Dev)
 	r := &Region{}
 	if err := decodeStrict(l.RegionFile(), r); err != nil {
 		return nil, err
@@ -334,7 +336,7 @@ func LoadRegion(l Layout) (*Region, error) {
 }
 
 func LoadMachine(l Layout) (*Machine, error) {
-	rootMode = !l.Dev
+	devMode.Store(l.Dev)
 	m := &Machine{}
 	if err := decodeStrict(l.MachineFile(), m); err != nil {
 		return nil, err
@@ -404,7 +406,7 @@ func LoadMachine(l Layout) (*Machine, error) {
 }
 
 func LoadOffice(l Layout, name string) (*Office, error) {
-	rootMode = !l.Dev
+	devMode.Store(l.Dev)
 	if !NameRE.MatchString(name) {
 		return nil, fmt.Errorf("%q is not an office name", name)
 	}
