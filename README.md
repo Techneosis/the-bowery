@@ -186,7 +186,9 @@ office hours, a gate, a budget. Each rule is a plugin that answers `open`,
 
 `bowery place` is the dispatcher's desk. It reads what each office on its
 round holds and asks each one (a probe, answered by the office itself) whether
-it would take the job now, then **sends a placement to the best office's
+it would take the job now (an office answers that only for its own people: a
+dispatcher who is another office's tenant hears "I'll judge it at the door",
+and the letter is weighed when it arrives), then **sends a placement to the best office's
 inbox**, or, when every door that could take it is shut, **puts the job on the
 waiting bench** (`bowery queue`) and says who is being waited on. Nobody edits
 a dispatcher's config when an office closes: the job waits, and `bowery place

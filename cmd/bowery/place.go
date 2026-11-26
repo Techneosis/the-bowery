@@ -272,6 +272,11 @@ type Candidate struct {
 	RetryAfter string `json:"retry_after,omitempty"`
 	Owner      string `json:"owner,omitempty"`
 	Running    int    `json:"running"`
+	// Deferred: the office's probe didn't judge for this caller (in root
+	// mode, a placer that isn't its user or an owner), so the office judges
+	// the placement when it arrives, and it was planned over from its
+	// catalog alone, like a peer's.
+	Deferred bool `json:"deferred,omitempty"`
 
 	cat   *offices.Catalog
 	peer  bool            // an office a peer region published to this one
@@ -506,7 +511,17 @@ func resolve(j *offices.Job, reg *offices.Region) *Decision {
 			c.Class, c.Reason = "unreachable", "its probe doesn't decode"
 			continue
 		}
-		if pa.Verdict != "open" {
+		switch pa.Verdict {
+		case "open":
+		case offices.Deferred:
+			// The published verdicts were weighed above; the owner's state
+			// is the rest of what the catalog says. An owner's open leaves
+			// the rules to the office, on arrival.
+			c.Deferred = true
+			if st := cat.State; st != nil && st.Applies(j, time.Now()) && st.State == "closed" {
+				c.Class, c.Reason, c.RetryAfter = "closed", "closed by its owner", st.Until
+			}
+		default:
 			c.Class, c.Reason, c.RetryAfter = "closed", pa.Reason, pa.RetryAfter
 		}
 	}
@@ -520,6 +535,9 @@ func resolve(j *offices.Job, reg *offices.Region) *Decision {
 		}
 	}
 	rank(pass, j, reg, here)
+	// An office that judged the job open goes before one that will judge it
+	// only on arrival: that one may yet keep it waiting in its inbox.
+	sort.SliceStable(pass, func(a, b int) bool { return !pass[a].Deferred && pass[b].Deferred })
 	rank(closed, j, reg, here)
 	for _, c := range pass {
 		d.Ranking = append(d.Ranking, c.Office)

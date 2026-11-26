@@ -367,12 +367,11 @@ func probe(c *offices.Config) {
 	if err := j.Validate(); err != nil {
 		die("the probe's job: %v", err)
 	}
-	res, err := evaluator(c, "resolver-probe").Evaluate("place", j)
+	ans, err := offices.Probe(evaluator(c, "resolver-probe"), j, offices.Whoami())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "office: %v\n", err)
 	}
-	printJSON(map[string]any{"office": c.Office.Name, "verdict": res.Verdict, "reason": res.Reason,
-		"retry_after": res.RetryAfter, "by": res.By, "instances": res.Instances})
+	printJSON(ans)
 }
 
 // ---------------------------------------------------------------- open, close
