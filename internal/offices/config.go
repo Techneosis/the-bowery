@@ -88,6 +88,10 @@ type Peer struct {
 	MayPlace []string   `toml:"may_place"`
 	MayView  []string   `toml:"may_view"`
 	Rules    []Instance `toml:"rules"`
+	// The bus topics this peer may publish into this region, and read
+	// from it (pkg/bus); default none.
+	MayPublish []string `toml:"may_publish"`
+	MayRead    []string `toml:"may_read"`
 }
 
 type Region struct {
@@ -103,6 +107,7 @@ type Region struct {
 	Naming          Naming          `toml:"naming"`
 	Defaults        RegionDefaults  `toml:"defaults"`
 	Peers           map[string]Peer `toml:"peers"`
+	Bus             BusConfig       `toml:"bus"`
 }
 
 // ---------------------------------------------------------------- machine
@@ -325,6 +330,9 @@ func LoadRegion(l Layout) (*Region, error) {
 			}
 		}
 		r.Peers[name] = p
+	}
+	if err := checkBus(l.RegionFile(), r); err != nil {
+		return nil, err
 	}
 	for i := range r.Defaults.Rules {
 		r.Defaults.Rules[i].source = "region"

@@ -32,11 +32,30 @@ address   = "/var/lib/offices-region-b"
 key       = "ssh-ed25519 AAAA… region-b"   # pinned: a seal or catalog by any other key is no link
 may_place = ["region-a-reviews"]
 may_view  = []
+# The bus topics region-b may publish into this region, and read from it.
+# Default none. A pattern is "*", a prefix like "job.*" (whole parts, any
+# depth) or one topic exactly. Both nodes check: what leaves here is checked
+# against may_read, what arrives against may_publish.
+may_publish = ["job.*"]
+may_read    = ["card.answered"]
 [[peers.region-b.rules]]
 name   = "region-b-hours"
 plugin = "hours"
 [peers.region-b.rules.config]
 windows = ["Mon..Fri 18:00-23:00"]
+
+# The bus (pkg/bus): how long topics are kept, the topics that never leave
+# this region, and what its local seats (by Unix user) may publish and read.
+[bus]
+retention = "720h"            # the default: 30 days
+private   = ["private.*"]     # never sent to a peer, whatever its may_read; no peer publishes into them
+
+[bus.retain]                  # per topic; the most specific pattern wins
+"job.*" = "168h"
+
+[bus.seats.alice]
+publish = ["job.*", "private.*"]
+read    = ["card.answered", "private.*"]
 
 # Rule instances every office in the region carries:
 # [[defaults.rules]]

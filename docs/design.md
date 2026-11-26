@@ -832,7 +832,7 @@ wrapper's.
 Offices exchange placements today; the bus is for everything else they
 want to tell each other as it happens (a job started, a card was
 answered), without anyone polling. Its core is `pkg/bus`, which other
-programs import. The node that serves it, the topic rules and replication
+programs import. The node that serves it and replication
 between regions come in later pieces; this is what they build on.
 
 - **One log per producer.** A producer is a region's seat
@@ -863,6 +863,31 @@ between regions come in later pieces; this is what they build on.
   share a directory: each producer's file is locked while it's read or
   written, and a handle catches up with the others before it decides
   anything.
+- **Topic rules, in the region file.** Each peer gets `may_publish` (the
+  topics it may send into this region) and `may_read` (the topics it may
+  be sent), beside `may_place`, so one edit grants or revokes both. Local
+  seats get `publish` and `read` lists under `[bus.seats.<unix user>]`.
+  Everything defaults to deny. A pattern is `*`, a prefix like `job.*`
+  (whole parts, at any depth: not `jobs.started`), or one topic. Topics in
+  `[bus] private` never leave the region, whatever a peer's `may_read`
+  says, and no peer may publish into them; the region's own seats use them
+  like any other. The check is one library call, `Rules.Allowed(peer,
+  kind, dir)` (and `SeatAllowed` for seats), and the node makes it on both
+  sides: before an event leaves for a peer, and again when one arrives, so
+  a peer's own rules can't widen this region's. A bad pattern fails the
+  region file, like any other bad value, and `office check` says which.
+- **Retention per topic.** Events are kept 30 days unless `[bus] retention`
+  or a pattern in `[bus.retain]` says otherwise (the most specific pattern
+  wins). Compaction rewrites a producer's log without what's past its time
+  and swaps it in by a rename; other handles see the new file the next
+  time they lock it. It always keeps each producer's head, so a resend is
+  still a duplicate and a different event at that seq still a fork. Each
+  producer has a **floor**, the highest seq dropped, written beside its log
+  before the swap (a crash in between leaves it too high, never too low).
+  A cursor below a floor gets `ErrTooOld`, the bus's `410 resync`, and no
+  records: the reader would miss something. A resyncing reader reads with
+  `SinceKept`, which serves what's still kept instead, and once it has
+  read to the heads it's past every floor.
 
 ## The worktree-group hazard
 

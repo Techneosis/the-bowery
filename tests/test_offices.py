@@ -713,6 +713,46 @@ class Pull(Offices):
         r = self.office("check", self.REVIEWS)
         self.assertIn("effect pr exceeds tier reader", r.stderr)
 
+    BUS = textwrap.dedent("""
+        [bus]
+        retention = "240h"
+        private   = ["private.*"]
+
+        [bus.retain]
+        "job.*" = "24h"
+
+        [bus.seats.alice]
+        publish = ["job.*", "private.*"]
+        read    = ["*"]
+
+        [peers.region-b]
+        address     = "/srv/b"
+        may_publish = ["job.*"]
+        may_read    = ["card.answered"]
+        """)
+
+    def test_bus_topic_rules_are_checked_with_the_region(self):
+        self.write_region(self.BUS)
+        self.office_ok("check", self.REVIEWS)
+        self.office_ok("describe", self.REVIEWS)
+        for bad, why in [
+            (self.BUS.replace('"job.*", "private.*"', '"job*"'), 'bus.seats.alice.publish: "job*"'),
+            (self.BUS.replace('may_read    = ["card.answered"]', 'may_read = ["card"]'), 'peers.region-b.may_read: "card"'),
+            (self.BUS.replace('"*"', '"*.done"'), '"*.done"'),
+            (self.BUS.replace('retention = "240h"', 'retention = "a month"'), "bus.retention"),
+            (self.BUS.replace('retention = "240h"', 'retention = "-1h"'), "bus.retention"),
+            (self.BUS.replace('"job.*" = "24h"', '"job.*" = "soon"'), "bus.retain"),
+            (self.BUS.replace('"job.*" = "24h"', '"job" = "24h"'), 'bus.retain: "job"'),
+            (self.BUS.replace("[bus.seats.alice]", "[bus.seats.Alice]"), "bus.seats.Alice"),
+            (self.BUS.replace('private   = ["private.*"]', 'private = ["*"]'), "bus.private"),
+            (self.BUS.replace('retention = "240h"', 'retention = "240h"\nmay_read = ["x.y"]'), "may_read"),
+        ]:
+            with self.subTest(why=why):
+                self.write_region(bad)
+                r = self.office("check", self.REVIEWS)
+                self.assertEqual(r.returncode, 1, r.stdout)
+                self.assertIn(why, r.stderr)
+
     def test_the_machine_file_must_name_this_machine(self):
         self.write_machine()
         text = (self.etc / "machine.toml").read_text().replace(f'machine = "{HOST}"', 'machine = "box-1"', 1)
