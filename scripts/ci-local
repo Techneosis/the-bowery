@@ -90,7 +90,7 @@ while [ "$left" -gt 0 ]; do
   left=$((left - 1))
   for i in "${!pids[@]}"; do [ "${pids[$i]}" = "$done" ] && who=${names[$i]}; done
   if [ "$r" -eq 0 ]; then
-    echo "ci-local: $who passed ($(grep -E '^Ran [0-9]+ tests' "$logs/$who.log" | tail -1))"
+    echo "ci-local: $who passed ($(grep -E '^test-suite: ran' "$logs/$who.log" | tail -1))"
   else
     echo "ci-local: $who FAILED (exit $r); the tail of $logs/$who.log:"
     tail -25 "$logs/$who.log" | sed 's/^/    /'
