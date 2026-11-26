@@ -51,7 +51,7 @@ func ReadGate(name string, p Plugin, now time.Time) (*Gate, error) {
 	if !fi.Mode().IsRegular() {
 		return nil, fmt.Errorf("its state file %s isn't a regular file", p.Path)
 	}
-	if rootMode {
+	if !devMode.Load() {
 		// Root's, and so is every directory above it: a gate an office's
 		// user could write, or swap, is no gate.
 		if err := checkRootOwned(p.Path); err != nil {

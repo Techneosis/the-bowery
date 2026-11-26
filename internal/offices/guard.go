@@ -70,7 +70,7 @@ func openPinned(path, pin string) (*os.File, string, error) {
 	if err != nil {
 		return nil, "", fmt.Errorf("can't read the plugin: %v", err)
 	}
-	if rootMode {
+	if !devMode.Load() {
 		fi, err := f.Stat()
 		st, ok := fi.Sys().(*syscall.Stat_t)
 		if err != nil || !ok || st.Uid != 0 || fi.Mode().Perm()&0o022 != 0 {

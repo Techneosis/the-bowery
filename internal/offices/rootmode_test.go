@@ -159,3 +159,48 @@ func TestTheRecorderTakesOnlyItsOfficesCallers(t *testing.T) {
 		}
 	}
 }
+
+// Two offices on one machine, in root mode. The placer is office-a's user,
+// placing into builder as a signer builder trusts. Its resolver probes
+// builder, and the probe can't record builder's decisions as office-a: the
+// recorder rightly refuses it. So the probe must not judge for builder at
+// all. It defers, and builder judges the placement when it arrives, as
+// itself. Nothing of builder's is written by the placer.
+func rootModeBuilder(t *testing.T) *Config {
+	root := t.TempDir()
+	l := Layout{Dev: false, Etc: filepath.Join(root, "etc"), Var: filepath.Join(root, "var"), Recorder: "offices-rec"}
+	return &Config{L: l, Region: &Region{Region: "region-a"}, Machine: &Machine{Machine: "swarm-box", Recorder: "offices-rec"},
+		Office: &Office{Name: "builder", User: "builder", Owner: []string{"alice"}, Rules: OfficeRules{Default: "open"}}}
+}
+
+func TestAnotherOfficesUserProbesWithoutJudging(t *testing.T) {
+	c := rootModeBuilder(t)
+	job := &Job{ID: "b-1", Kind: "builder", AskedBy: "placer", From: "region-a"}
+	ans, err := Probe(NewEvaluator(c, "resolver-probe"), job, "office-a")
+	if err != nil {
+		t.Fatalf("a probe from another office's user: %v", err)
+	}
+	if ans.Verdict != "deferred" || !strings.Contains(ans.Reason, "judges it when it arrives") {
+		t.Fatalf("want the probe deferred to builder, got %s: %s", ans.Verdict, ans.Reason)
+	}
+	if ents, _ := os.ReadDir(c.L.Var); len(ents) > 0 {
+		t.Fatalf("the placer wrote builder's files: %v", ents)
+	}
+}
+
+// builder's own user (and its owners) still judge at the probe: what they
+// decide goes through the recorder, which takes them.
+func TestTheOfficesOwnUsersStillJudgeTheProbe(t *testing.T) {
+	c := rootModeBuilder(t)
+	job := &Job{ID: "b-1", Kind: "builder", AskedBy: "placer", From: "region-a"}
+	for _, caller := range []string{"builder", "alice"} {
+		ans, _ := Probe(NewEvaluator(c, "resolver-probe"), job, caller)
+		if ans.Verdict == "deferred" {
+			t.Fatalf("%s's probe deferred: it must judge", caller)
+		}
+	}
+	// An unknown caller is never taken for the office.
+	if ans, _ := Probe(NewEvaluator(c, "resolver-probe"), job, ""); ans.Verdict != "deferred" {
+		t.Fatalf("an unnamed caller judged: %s", ans.Verdict)
+	}
+}

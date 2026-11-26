@@ -237,6 +237,11 @@ func LoadPrivateKey(path string) (PrivateKey, error) {
 	return PrivateKey{Public: pub, external: path}, nil
 }
 
+// NewPrivateKey wraps an ed25519 key held in memory.
+func NewPrivateKey(k ed25519.PrivateKey) PrivateKey {
+	return PrivateKey{Public: PublicKey{Key: k.Public().(ed25519.PublicKey)}, key: k}
+}
+
 var errNeedsSSHKeygen = errors.New("needs ssh-keygen")
 
 // SignWith signs msg in namespace with k, natively or through ssh-keygen.

@@ -16,6 +16,8 @@ func newDirWatch(string) (*dirWatch, error) {
 	return nil, errors.New("no directory watch on this platform")
 }
 
+func newAppendWatch(dir string) (*dirWatch, error) { return newDirWatch(dir) }
+
 func (w *dirWatch) wait(context.Context, time.Time) (bool, error) { return false, nil }
 
 func (w *dirWatch) close() {}

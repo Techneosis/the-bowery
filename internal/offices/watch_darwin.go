@@ -50,6 +50,11 @@ func newDirWatch(dir string) (*dirWatch, error) {
 	return w, nil
 }
 
+// newAppendWatch is the directory's watch: kqueue on a directory doesn't see
+// an append to a file in it, so a bus follower there is woken by the node
+// itself, or by its backstop.
+func newAppendWatch(dir string) (*dirWatch, error) { return newDirWatch(dir) }
+
 // wait blocks until an event, the deadline, or ctx; true means an event.
 func (w *dirWatch) wait(ctx context.Context, deadline time.Time) (bool, error) {
 	stop := context.AfterFunc(ctx, func() {

@@ -547,9 +547,18 @@ doesn't answer;
 filtered on what each office holds (the same `Mismatch` function the office
 uses when it accepts); then a published office-wide `closed`, else a probe
 (`office describe --probe`, the job on stdin), which the office answers by
-running its own place-phase rules. Survivors are ranked (`prefer`,
+running its own place-phase rules. In root mode the probe judges only for
+the office's own user and its owners, because judging means recording the
+office's decisions and the recorder takes them from nobody else. Anyone
+else placing into it (another office's user on the same machine, as a
+signer it trusts) gets `deferred`: nothing is run or written, the resolver
+filters that office on its catalog alone (the owner's state, office-wide
+verdicts), as it does a peer's, and the office judges the signed placement
+when it arrives, at the accept phase, as itself. No one but the office and
+its owners ever writes its record. Survivors are ranked (`prefer`,
 `holds-repo`, `same-machine`, `same-region`, `fewest-running`, then region and
-name). The top one gets the placement, through the transport, and bowery exits
+name), with any office that judged the job open ahead of a deferred one,
+which might yet keep it waiting in its inbox. The top one gets the placement, through the transport, and bowery exits
 0. If none passes but some office was only closed (or didn't answer), the job
 waits in `~/.local/state/bowery/queue/<id>.json` with the whole filter table,
 the asker and the best closed office's owner are told once, and bowery exits
@@ -826,6 +835,118 @@ when `office publish` runs, and peers' own published verdicts for their
 peer rules. Rule plugins run as whoever runs the evaluation (the office's
 user, in the pull job), and the resume re-check is the pull job's, not a
 wrapper's.
+
+## The bus
+
+Offices exchange placements today; the bus is for everything else they
+want to tell each other as it happens (a job started, a card was
+answered), without anyone polling. Its core is `pkg/bus`, which other
+programs import, and `office bus` serves it on each machine and replicates
+it between regions.
+
+- **One log per producer.** A producer is a region's seat
+  (`<region>/<seat>`) or a service with a bare name. It numbers its own
+  events with `seq`, strictly increasing, with gaps allowed (a service
+  can number them by its own table's ids, where not every row goes out).
+  There's no order across producers. An event that follows from another
+  names it in `cause`.
+- **Signed and sealed, like a placement.** Each event is signed by its
+  producer (namespace `bus-event`) and sealed by its region
+  (`bus-region`) over its canonical bytes: compact JSON, fields in a fixed
+  order, free-form parts with sorted keys, the time in UTC. Neither
+  signature can pass for the other, or for a placement or a catalog. A
+  region's seat must be sealed by its own region. Both keys must be pinned
+  by the reader. The signatures are `ssh-keygen -Y` signatures, so an
+  event can be checked by hand.
+- **A reader's position is a vector cursor**: one seq per producer,
+  written `producer=seq,producer=seq` (sorted), so it fits in an SSE
+  `Last-Event-ID`. A producer the cursor doesn't name is read from its
+  start.
+- **The log** keeps one append-only file per producer, one record per
+  line. It verifies every record before appending it. A resend of a record
+  it has is dropped quietly, so a producer that crashed between writing
+  and sending just sends again. A different event at a seq it has is a
+  fork, and one older than the head that it doesn't have is refused. Both
+  are errors. A torn last line from a crash is cut off when the log opens,
+  and any other bad line means the log won't open. Several handles may
+  share a directory: each producer's file is locked while it's read or
+  written, and a handle catches up with the others before it decides
+  anything.
+- **Topic rules, in the region file.** Each peer gets `may_publish` (the
+  topics it may send into this region) and `may_read` (the topics it may
+  be sent), beside `may_place`, so one edit grants or revokes both. Local
+  seats get `publish` and `read` lists under `[bus.seats.<unix user>]`.
+  Everything defaults to deny. A pattern is `*`, a prefix like `job.*`
+  (whole parts, at any depth: not `jobs.started`), or one topic. Topics in
+  `[bus] private` never leave the region, whatever a peer's `may_read`
+  says, and no peer may publish into them; the region's own seats use them
+  like any other. The check is one library call, `Rules.Allowed(peer,
+  kind, dir)` (and `SeatAllowed` for seats), and the node makes it on both
+  sides: before an event leaves for a peer, and again when one arrives, so
+  a peer's own rules can't widen this region's. A bad pattern fails the
+  region file, like any other bad value, and `office check` says which.
+- **Retention per topic.** Events are kept 30 days unless `[bus] retention`
+  or a pattern in `[bus.retain]` says otherwise (the most specific pattern
+  wins). Compaction rewrites a producer's log without what's past its time
+  and swaps it in by a rename; other handles see the new file the next
+  time they lock it. It always keeps each producer's head, so a resend is
+  still a duplicate and a different event at that seq still a fork. Each
+  producer has a **floor**, the highest seq dropped, written beside its log
+  before the swap (a crash in between leaves it too high, never too low).
+  A cursor below a floor gets `ErrTooOld`, the bus's `410 resync`, and no
+  records: the reader would miss something. A resyncing reader reads with
+  `SinceKept`, which serves what's still kept instead, and once it has
+  read to the heads it's past every floor.
+- **The local node.** `office bus serve` runs a region's node on one
+  machine: a unix socket at `<var>/bus/node.sock`, the log beside it in
+  `<var>/bus/log`, and a lock so only one node serves it. The seat is the
+  Unix user the kernel saw connect (`SO_PEERCRED`), never something the
+  client says. A seat has no key of its own on the machine, so the node
+  speaks for it: it signs the seat's event (`<region>/<seat>`, the seat's
+  next seq, the node's clock) and seals it, both with the region key under
+  their two namespaces, if `[bus.seats]` lets that seat publish the topic.
+  `office bus follow` reads from a cursor: what the seat's `read` list
+  allows (a `--topic` filter narrows it, never widens it), a `caught_up`
+  line once the backlog is sent, then each new record as it's appended.
+  A publish wakes followers at once; an inotify watch on the log wakes them
+  for writers the node didn't see; a one-second backstop covers a platform
+  with neither. The node reads the log on demand, so a reader that keeps
+  reading is never let go, however long its backlog. One that stops is
+  held 1,024 records and five seconds, then told `resume from <cursor>`
+  (exactly what it was sent) and closed: `follow` exits 3 and the reader
+  picks up there. In dev mode the peer is always the invoking user, so
+  `OFFICE_BUS_AS` names the seat; root mode refuses it. Reading the peer is
+  Linux-only so far: elsewhere, root mode refuses the connection.
+- **Replication between regions.** A node exchanges events with each peer
+  whose entry has an `address` and something to exchange, over the
+  machine's transport: with `dir` the address is the peer's var directory
+  and the call goes to its node's socket; with `http` it's the peer's
+  `office serve`, which hands `POST /bus/peer` to its own node. Two calls
+  carry everything. A **push** sends the peer what it may read, as soon as
+  this node's log grows. A **pull** asks it for what it may publish here,
+  and long-polls (up to 20 s) until it has something, so neither way waits
+  on a timer. The side that can reach the other makes both calls, and its
+  peer only answers: a machine behind a firewall needs no inbound port. If
+  both can reach each other, both do; a resend is a duplicate and is
+  dropped. Each call is signed with the calling region's key (namespace
+  `bus-peer`) and names both regions and its time (five minutes either
+  way), and a call is answered once, so the answering node knows who is
+  asking without trusting the transport, and a copied pull hands nothing
+  over. The rules are checked on both sides: the sender sends only what the
+  peer's `may_read` allows (never a private topic, never the peer's own
+  events), and the receiver verifies each record's signature and seal
+  against its pinned keys (a peer's region key seals its events and signs
+  for its seats) and keeps only what the peer's `may_publish` allows. Each
+  peering keeps two vector cursors in `<var>/bus/peers/<peer>.json`: what
+  the peer has had from here, and what this node has read from it, both
+  past what the rules skipped, so a restart resumes. A refused record still
+  moves the cursor (it would be refused again); a failed call doesn't, and
+  is tried again from one second, doubling to 30. A peer below a floor
+  gets what is still kept and is told what retention dropped (the `gap`):
+  a replica has no snapshot to resync from. `office bus status` shows each
+  peering's cursors and its last error. Only a peer's own events cross for
+  now: an event of a third region is refused unless its key is pinned here
+  too.
 
 ## The worktree-group hazard
 

@@ -57,6 +57,19 @@ const usage = `office: the office host. Opens and closes offices, judges placeme
   office serve [--listen HOST:PORT]        the http transport's endpoint for this machine's offices:
                                            POST /placements/<box>, POST /replies/<asker>?id=<id>,
                                            GET /catalog/<peer>; binds the machine file's listen
+  office bus serve                         the region's local bus node: a unix socket under the var
+                                           directory; its peer's Unix user is the seat, the region
+                                           file's [bus.seats] say what that seat may publish and read;
+                                           it replicates with each peer that has an address (push and
+                                           pull, signed, within may_read / may_publish)
+  office bus publish <topic> [--owner O,..] [--subject JSON] [--actor JSON] [--data JSON]
+                     [--cause PRODUCER:SEQ] [--json]
+                                           publish as your seat: the node signs and seals it
+  office bus follow [--cursor C] [--topic T,..] [--once]
+                                           the records your seat may read past the cursor, one JSON
+                                           line each, as they arrive; exit 3 means the node let go of
+                                           a reader that fell behind: resume from the cursor it names
+  office bus status [--json]               the node's heads and floors, and your seat's topics
   office version
 
 --until takes an RFC 3339 time or a duration from now (90m, 24h).
@@ -64,7 +77,8 @@ const usage = `office: the office host. Opens and closes offices, judges placeme
 Root mode reads /usr/local/etc/offices and /var/lib/offices, and checks that
 config and plugins are root-owned and that the pull job runs as the office's
 user. OFFICE_ROOT=<dir> is dev mode: everything under <dir>, as you, and every
-command says what it isn't checking. OFFICE_NOW (dev mode only) fixes the clock.
+command says what it isn't checking. OFFICE_NOW (dev mode only) fixes the clock;
+OFFICE_BUS_AS (dev mode only) names the bus seat, since the socket's peer is you.
 
 Exit: 0 done, 1 error.`
 
@@ -126,6 +140,8 @@ func main() {
 		cmdPublish(rest)
 	case "serve":
 		cmdServe(rest)
+	case "bus":
+		cmdBus(rest)
 	default:
 		die("unknown command %s (office --help)", cmd)
 	}
@@ -351,12 +367,11 @@ func probe(c *offices.Config) {
 	if err := j.Validate(); err != nil {
 		die("the probe's job: %v", err)
 	}
-	res, err := evaluator(c, "resolver-probe").Evaluate("place", j)
+	ans, err := offices.Probe(evaluator(c, "resolver-probe"), j, offices.Whoami())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "office: %v\n", err)
 	}
-	printJSON(map[string]any{"office": c.Office.Name, "verdict": res.Verdict, "reason": res.Reason,
-		"retry_after": res.RetryAfter, "by": res.By, "instances": res.Instances})
+	printJSON(ans)
 }
 
 // ---------------------------------------------------------------- open, close

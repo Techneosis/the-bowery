@@ -88,8 +88,8 @@ func TestRootModeRefusesFilesNotOwnedByRoot(t *testing.T) {
 	if err := os.WriteFile(p, []byte("region = \"r\"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	rootMode = true
-	defer func() { rootMode = true }()
+	devMode.Store(false)
+	defer devMode.Store(false)
 	if err := checkRootOwned(p); err == nil || !strings.Contains(err.Error(), "not owned by root") {
 		t.Fatalf("got %v", err)
 	}

@@ -186,7 +186,9 @@ office hours, a gate, a budget. Each rule is a plugin that answers `open`,
 
 `bowery place` is the dispatcher's desk. It reads what each office on its
 round holds and asks each one (a probe, answered by the office itself) whether
-it would take the job now, then **sends a placement to the best office's
+it would take the job now (an office answers that only for its own people: a
+dispatcher who is another office's tenant hears "I'll judge it at the door",
+and the letter is weighed when it arrives), then **sends a placement to the best office's
 inbox**, or, when every door that could take it is shut, **puts the job on the
 waiting bench** (`bowery queue`) and says who is being waited on. Nobody edits
 a dispatcher's config when an office closes: the job waits, and `bowery place
@@ -256,6 +258,25 @@ over nothing else. It looks at a letter only to see that it is one (its size,
 its envelope, the box it's for); whether to trust it is the office's call, by
 the signatures, as always.
 
+**Word on the street** (the bus) is for everything else the offices want to
+tell each other as it happens (a job started, a card was answered), so nobody
+has to keep knocking to ask. Each machine keeps a **news-stand** (`office bus
+serve`). Whoever speaks (a seat in the district, which is a Unix user, or a
+service) keeps a numbered daybook of its own, every line signed and stamped
+with the district's seal, and the stand files each line only after checking
+both. A reader says how far it has read in each daybook (its cursor) and is
+handed what's new the moment it's filed (`office bus follow`); one that
+stops reading is told where it got to and let go. The district's file says
+which topics each seat may speak on and hear, and which may cross the line
+to each other district and back; everything is closed until it says so, and
+a district's private topics never leave it. Between districts the stands
+trade over the same courier or wire as the post, both ways, from whichever
+side can reach the other, so a district behind a locked door needs no door
+opened. Each stand checks the other's signatures and the topic rules again
+on its own side, and old news is thrown out on a schedule per topic (a
+reader that fell behind what was thrown out is told so, not handed a gap
+in silence).
+
 ```
 bowery place --kind review --needs tools=git -- "review PR 12"   # 0 placed, 4 waiting, 3 refused, 1 error
 bowery dispatch rev --job-kind review --office region-a-reviews -- "review PR 12"
@@ -271,6 +292,10 @@ bowery queue                                # who is on the waiting bench, and f
 office publish                              # post each peer district its signed list
 office serve                                # the front desk: letters by wire, lists collected
 bowery peers                                # what the other districts post to us
+office bus serve                            # this machine's news-stand (one per district's log)
+office bus publish job.started --data '{"id":"rev-12"}'   # say something, as your seat
+office bus follow --topic 'job.*'           # read from your cursor, then as it's filed
+office bus status                           # the daybooks, the readers, each peer district's cursors
 ```
 
 `OFFICE_ROOT=<dir>` runs every office under one directory as you, for trying
