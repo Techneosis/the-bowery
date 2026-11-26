@@ -82,13 +82,26 @@ _office() {
     cur=${COMP_WORDS[COMP_CWORD]}
     prev=${COMP_WORDS[COMP_CWORD-1]}
     if ((COMP_CWORD == 1)); then
-        COMPREPLY=($(compgen -W "ls describe open close clear stop done yielded pull log record check publish serve version" -- "$cur"))
+        COMPREPLY=($(compgen -W "ls describe open close clear stop done yielded pull log record check publish serve bus version" -- "$cur"))
         return
     fi
     case $prev in
         --until|--kinds|--scope|--interval|--backstop|--for|--since|--valid) return ;;
+        --owner|--subject|--actor|--data|--cause|--cursor|--topic) return ;;
     esac
     sub=${COMP_WORDS[1]}
+    if [[ $sub == bus ]]; then
+        if ((COMP_CWORD == 2)); then
+            COMPREPLY=($(compgen -W "serve publish follow status" -- "$cur"))
+        elif [[ $cur == -* ]]; then
+            case ${COMP_WORDS[2]} in
+                publish) COMPREPLY=($(compgen -W "--owner --subject --actor --data --cause --json" -- "$cur")) ;;
+                follow) COMPREPLY=($(compgen -W "--cursor --topic --once" -- "$cur")) ;;
+                status) COMPREPLY=($(compgen -W "--json" -- "$cur")) ;;
+            esac
+        fi
+        return
+    fi
     if [[ $cur == -* ]]; then
         case $sub in
             ls) COMPREPLY=($(compgen -W "--json" -- "$cur")) ;;

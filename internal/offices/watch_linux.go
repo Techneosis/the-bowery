@@ -15,13 +15,19 @@ import (
 // transport's inbox is a true long-poll on Linux.
 type dirWatch struct{ f *os.File }
 
-func newDirWatch(dir string) (*dirWatch, error) {
+func newDirWatch(dir string) (*dirWatch, error) { return newWatch(dir, 0) }
+
+// newAppendWatch also wakes on a write to a file that stays open (an
+// append-only log's).
+func newAppendWatch(dir string) (*dirWatch, error) { return newWatch(dir, syscall.IN_MODIFY) }
+
+func newWatch(dir string, extra uint32) (*dirWatch, error) {
 	fd, err := syscall.InotifyInit1(syscall.IN_CLOEXEC | syscall.IN_NONBLOCK)
 	if err != nil {
 		return nil, err
 	}
-	mask := uint32(syscall.IN_CREATE | syscall.IN_MOVED_TO | syscall.IN_MOVED_FROM | syscall.IN_CLOSE_WRITE |
-		syscall.IN_DELETE | syscall.IN_DELETE_SELF | syscall.IN_MOVE_SELF)
+	mask := extra | uint32(syscall.IN_CREATE|syscall.IN_MOVED_TO|syscall.IN_MOVED_FROM|syscall.IN_CLOSE_WRITE|
+		syscall.IN_DELETE|syscall.IN_DELETE_SELF|syscall.IN_MOVE_SELF)
 	if _, err := syscall.InotifyAddWatch(fd, dir, mask); err != nil {
 		syscall.Close(fd)
 		return nil, err

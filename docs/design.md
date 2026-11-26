@@ -832,8 +832,8 @@ wrapper's.
 Offices exchange placements today; the bus is for everything else they
 want to tell each other as it happens (a job started, a card was
 answered), without anyone polling. Its core is `pkg/bus`, which other
-programs import. The node that serves it and replication
-between regions come in later pieces; this is what they build on.
+programs import, and `office bus` serves it on each machine. Replication
+between regions comes in a later piece; this is what it builds on.
 
 - **One log per producer.** A producer is a region's seat
   (`<region>/<seat>`) or a service with a bare name. It numbers its own
@@ -888,6 +888,26 @@ between regions come in later pieces; this is what they build on.
   records: the reader would miss something. A resyncing reader reads with
   `SinceKept`, which serves what's still kept instead, and once it has
   read to the heads it's past every floor.
+- **The local node.** `office bus serve` runs a region's node on one
+  machine: a unix socket at `<var>/bus/node.sock`, the log beside it in
+  `<var>/bus/log`, and a lock so only one node serves it. The seat is the
+  Unix user the kernel saw connect (`SO_PEERCRED`), never something the
+  client says. A seat has no key of its own on the machine, so the node
+  speaks for it: it signs the seat's event (`<region>/<seat>`, the seat's
+  next seq, the node's clock) and seals it, both with the region key under
+  their two namespaces, if `[bus.seats]` lets that seat publish the topic.
+  `office bus follow` reads from a cursor: what the seat's `read` list
+  allows (a `--topic` filter narrows it, never widens it), a `caught_up`
+  line once the backlog is sent, then each new record as it's appended.
+  A publish wakes followers at once; an inotify watch on the log wakes them
+  for writers the node didn't see; a one-second backstop covers a platform
+  with neither. The node reads the log on demand, so a reader that keeps
+  reading is never let go, however long its backlog. One that stops is
+  held 1,024 records and five seconds, then told `resume from <cursor>`
+  (exactly what it was sent) and closed: `follow` exits 3 and the reader
+  picks up there. In dev mode the peer is always the invoking user, so
+  `OFFICE_BUS_AS` names the seat; root mode refuses it. Reading the peer is
+  Linux-only so far: elsewhere, root mode refuses the connection.
 
 ## The worktree-group hazard
 
