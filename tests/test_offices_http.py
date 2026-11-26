@@ -160,7 +160,17 @@ class OnlyOverHTTP(OverHTTP, R.Regions):
     def test_the_endpoint_refuses_oversize_traversal_and_strangers(self):
         box = f"{self.a_url}/placements/office-{self.REVIEWS}"
         big = self.peer_letter("big-1") + "x" * (64 << 10)
-        self.assertEqual(self.post(box, big), 413)
+        # The endpoint answers 413 and closes once the cap is passed. The
+        # client may still be sending the rest, and some kernels (macOS) then
+        # reset the connection before the 413 is read: that is the same
+        # refusal. Either way nothing may be stored (checked at the end).
+        try:
+            code = self.post(box, big)
+        except (ConnectionError, urllib.error.URLError) as e:
+            reason = getattr(e, "reason", e)
+            self.assertIsInstance(reason, (ConnectionResetError, BrokenPipeError), e)
+            code = 413
+        self.assertEqual(code, 413)
         self.assertEqual(self.post(box, self.peer_letter("ct-1"), ctype="application/json"), 415)
         self.assertEqual(self.post(box, "not a letter\n"), 400)
         for path in ("/placements/..", "/placements/%2E%2E%2Fowner", f"/placements/office-{self.REVIEWS}%2F..",
