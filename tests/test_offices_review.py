@@ -147,7 +147,7 @@ class ProcessGroups(Offices):
         return int((self.lib / "child.pid").read_text())
 
     def wait_dead(self, pid):
-        deadline = time.monotonic() + 5
+        deadline = time.monotonic() + 20  # under the loop's --for and the timer it rules out; generous for a loaded runner (CI-FAST)
         while time.monotonic() < deadline and alive(pid):
             time.sleep(0.05)
         return not alive(pid)

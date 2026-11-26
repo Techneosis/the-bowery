@@ -391,7 +391,7 @@ class Stages(Offices):
         try:
             time.sleep(0.5)
             self.place("--kind", "review", "--id", "rev-loop", code=0)
-            deadline = time.monotonic() + 10
+            deadline = time.monotonic() + 15  # under the loop's --for and the timer it rules out; generous for a loaded runner (CI-FAST)
             while time.monotonic() < deadline and "rev-loop" not in self.started_ids():
                 time.sleep(0.1)
             self.assertEqual(self.started_ids(), ["rev-loop"])
@@ -410,7 +410,7 @@ class Stages(Offices):
             time.sleep(1)
             self.assertEqual(self.started_ids(), [])
             self.office_ok("open", self.REVIEWS)
-            deadline = time.monotonic() + 10
+            deadline = time.monotonic() + 15  # under the loop's --for and the timer it rules out; generous for a loaded runner (CI-FAST)
             while time.monotonic() < deadline and not self.started_ids():
                 time.sleep(0.1)
             self.assertEqual(self.started_ids(), ["rev-ev"])

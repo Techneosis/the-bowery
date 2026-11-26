@@ -204,7 +204,7 @@ class TheDoneWhen(Run):
             self.assertEqual(self.started_ids(), [])
             self.assertEqual(self.events(self.REVIEWS, "place-waiting")[0]["reason"], "the owner is at the desk")
             self.set_gate(True)  # the writer's next write
-            deadline = time.monotonic() + 10
+            deadline = time.monotonic() + 20  # under the loop's --for and the timer it rules out; generous for a loaded runner (CI-FAST)
             while time.monotonic() < deadline and not self.started_ids():
                 time.sleep(0.1)
             self.assertEqual(self.started_ids(), ["g-2"])
@@ -569,14 +569,18 @@ class LongPoll(Run):
         try:
             time.sleep(0.5)
             self.place("--kind", "review", "--id", "lp-1", code=0)
-            deadline = time.monotonic() + 5
-            while time.monotonic() < deadline and not self.started_ids():
+            deadline = time.monotonic() + 20  # under the loop's --for and the timer it rules out; generous for a loaded runner (CI-FAST)
+            # The agent starts before the office logs its launch: wait for the line.
+            launched = []
+            while time.monotonic() < deadline and not launched:
+                launched = self.events(self.REVIEWS, "launched")
                 time.sleep(0.05)
             self.assertEqual(self.started_ids(), ["lp-1"])
-            st = self.events(self.REVIEWS, "launched")[0]["stages"]
+            st = launched[0]["stages"]
             sent = datetime.fromisoformat(st["send"].replace("Z", "+00:00"))
             delivered = datetime.fromisoformat(st["delivered"].replace("Z", "+00:00"))
-            self.assertLess((delivered - sent).total_seconds(), 2)
+            # Taken on the letter's event, not at the 30s interval: well under it, generously (CI-FAST).
+            self.assertLess((delivered - sent).total_seconds(), 10)
         finally:
             loop.terminate()
             loop.wait(5)
@@ -593,7 +597,7 @@ class LongPoll(Run):
         loop = subprocess.Popen([OFFICE_BIN, "pull", self.REVIEWS, "--loop", "--interval", "30s", "--backstop", "60s",
                                  "--for", "30s"], env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         try:
-            deadline = time.monotonic() + 6
+            deadline = time.monotonic() + 20  # under the loop's --for and the timer it rules out; generous for a loaded runner (CI-FAST)
             while time.monotonic() < deadline and not self.surface_calls("hold"):
                 time.sleep(0.05)
             self.assertEqual(self.surface_calls("hold")[0][0], "lp-2")

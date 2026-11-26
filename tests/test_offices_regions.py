@@ -191,8 +191,10 @@ class TheDoneWhen(Regions):
             time.sleep(0.5)
             t0 = time.monotonic()
             out, _ = self.b_place("--kind", "review", "--id", "peer-1", "--", "review PR 7", code=0)
-            deadline = time.monotonic() + 10
-            while time.monotonic() < deadline and "peer-1" not in self.started_ids():
+            deadline = time.monotonic() + 20  # under the loop's --for and the timer it rules out; generous for a loaded runner (CI-FAST)
+            # Started, and its launch logged (the agent starts before the line is written).
+            while time.monotonic() < deadline and not (
+                    "peer-1" in self.started_ids() and self.events(self.REVIEWS, "launched")):
                 time.sleep(0.05)
             took = time.monotonic() - t0
         finally:

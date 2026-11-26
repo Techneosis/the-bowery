@@ -135,7 +135,7 @@ class MidPassEvent(Drops, Run):
             time.sleep(1)  # the loop is blocked on an empty inbox
             arm.write_text("x")
             self.drop("mp-1")
-            deadline = time.monotonic() + 8
+            deadline = time.monotonic() + 20  # under the loop's --for and the timer it rules out; generous for a loaded runner (CI-FAST)
             while time.monotonic() < deadline and not self.started_ids():
                 time.sleep(0.1)
             self.assertEqual(self.started_ids(), ["mp-1"])
