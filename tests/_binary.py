@@ -27,6 +27,14 @@ def _build() -> str:
     return os.path.join(out, "bowery")
 
 
+# A hosted CI runner on macOS or ARM is too slow and too shared for a
+# wall-clock bound to mean anything (2026-11-26: a 1-2ms wake read 101ms,
+# a peer hop missed its seconds). There, the timing assertions are skipped
+# and the mechanism checks around them still run; both platforms' timing is
+# checked before a push by scripts/ci-local on real machines (CI-FAST).
+SLOW_CI = bool(os.environ.get("CI")) and (
+    os.uname().sysname == "Darwin" or os.uname().machine in ("arm64", "aarch64"))
+
 BIN = os.environ.get("BOWERY_BIN") or _build()
 _dir = os.path.dirname(BIN)
 OFFICE_BIN = os.environ.get("OFFICE_BIN") or os.path.join(_dir, "office")

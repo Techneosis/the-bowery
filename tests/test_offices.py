@@ -108,6 +108,10 @@ class Offices(unittest.TestCase):
         self.write_office(self.BUILDER, kinds=["builder"], tools=["git", "go"], rules="")
 
     def tearDown(self):
+        # Cleanups (a node or loop a test started) run after tearDown, so
+        # run them first: a process still writing would refill the folder
+        # as it is removed.
+        self.doCleanups()
         self._tmp.cleanup()
 
     # ------------------------------------------------------------ config
@@ -900,7 +904,7 @@ class ADeferredProbe(Offices):
               for o in {cases}; do
                 if [ "$2" = "$o" ]; then
                   cat >/dev/null
-                  printf '{{"office":"%s","verdict":"deferred","reason":"placer isn\\x27t its user","retry_after":"","by":"","instances":[]}}\\n' "$2"
+                  printf '{{"office":"%s","verdict":"deferred","reason":"placer is not its user","retry_after":"","by":"","instances":[]}}\\n' "$2"
                   exit 0
                 fi
               done

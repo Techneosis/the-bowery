@@ -1,12 +1,21 @@
 name: test
 on: [push, pull_request]
+
+# A newer push to the same branch supersedes the run before it.
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     strategy:
-      # one platform failing shouldn't cancel the other's answer
-      fail-fast: false
+      # The first failure is the answer: stop the other platform's run.
+      fail-fast: true
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        # macOS runs on main, tags and pull requests. A branch is checked on
+        # both platforms before it's pushed (scripts/ci-local), so a branch
+        # push gets the Linux run alone.
+        os: ${{ (github.event_name == 'pull_request' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')) && fromJSON('["ubuntu-latest", "macos-latest"]') || fromJSON('["ubuntu-latest"]') }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -16,7 +25,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
+      - run: test -z "$(gofmt -l .)"
       - run: go vet ./...
+      - run: go test ./...
       - run: CGO_ENABLED=0 go build -trimpath -o build/bowery ./cmd/bowery
       # Black-box: the built binary through its CLI, against the fake herdr
       # and ssh in tests/fakes/ (no herdr needed on the runner).

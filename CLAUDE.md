@@ -31,6 +31,7 @@ Code setup.
 | `docs/releases/` | per-release notes, used by the release workflow instead of generated ones |
 | `install.sh` | piped/downloaded fetches a release, a checkout builds, an unpacked release installs its binary; `--claude-only` touches only Claude Code |
 | `scripts/package.sh` | builds and packages every release target, plus `SHA256SUMS` |
+| `scripts/ci-local` | the CI suite on a commit, here and on a second machine over ssh (`BOWERY_CI_REMOTE`), in parallel, failing fast: run it before every push |
 | `tests/test_offices.py` | offices in dev mode (`OFFICE_ROOT`), with the real hours plugin and a scripted one |
 | `tests/test_offices_run.py` | rules on the machine: state-file gates, facts, the run phase and `on_closed`, owner overrides, the long-poll |
 | `tests/test_offices_regions.py` | two dev-mode regions on one machine: signed and sealed placements, peer rules, pinned keys, catalogs, revocation, stage times across the hop (keys from `tests/_keys.py`, signed with the real `ssh-keygen`) |
@@ -45,6 +46,17 @@ Code setup.
 
 ## Rules
 
+- **Push only what passed on both platforms.** `scripts/ci-local` runs the
+  CI suite on the commit here and on a machine of the other platform
+  (`BOWERY_CI_REMOTE=user@host`, a clone at `BOWERY_CI_REMOTE_DIR`) at once.
+  A GitHub run takes 12-16 minutes, so it is the record, not the test loop:
+  branch pushes run Linux alone there, and macOS runs on main, tags and pull
+  requests.
+- **Time is a bound, not the claim.** A test of "it wakes on the event" or
+  "it doesn't wait on a timer" asserts the mechanism (the timer it could
+  have waited on is long, and it's seen waiting before the event) with a
+  generous bound, never a tight number of milliseconds: shared runners are
+  slow. Log the measured time instead.
 - **Run the tests.** They drive the real binary against throwaway records
   (`BOWERY_STATE`), worktrees (`BOWERY_WORKTREE_ROOT`), config
   (`BOWERY_CONFIG`) and a fake herdr server, so they never touch a real
