@@ -2,10 +2,13 @@ package offices
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"mime"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -268,6 +271,15 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	route, name := parts[0], parts[1]
+	if route == "bus" && name == "peer" {
+		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", http.MethodPost)
+			fail(http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		s.busPeer(w, r, fail)
+		return
+	}
 	want := http.MethodPost
 	if route == "catalog" {
 		want = http.MethodGet
@@ -331,6 +343,80 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		s.store(w, r, dir, MaxReply, false, fail)
 	}
+}
+
+// MaxBusCall caps a peer's bus call (pkg/bus's MaxPeerCall), and BusWait
+// is how long the endpoint lets one take: a pull long-polls up to its
+// MaxWait.
+const (
+	MaxBusCall = 8 << 20
+	BusWait    = 40 * time.Second
+)
+
+// busPeer hands a peer region's bus call to this machine's bus node, on
+// its socket, and sends back the node's answer. The node checks the call's
+// signature: the endpoint checks only its shape.
+func (s *Server) busPeer(w http.ResponseWriter, r *http.Request, fail func(int, string)) {
+	if mt, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type")); mt != "application/json" {
+		fail(http.StatusUnsupportedMediaType, "a bus call is application/json")
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, MaxBusCall+1))
+	if err != nil {
+		fail(http.StatusBadRequest, "the body can't be read")
+		return
+	}
+	if len(body) > MaxBusCall {
+		fail(http.StatusRequestEntityTooLarge, "too large")
+		return
+	}
+	var env json.RawMessage
+	if err := json.Unmarshal(body, &env); err != nil || len(env) == 0 || env[0] != '{' {
+		fail(http.StatusBadRequest, "a bus call is a JSON object")
+		return
+	}
+	rc := http.NewResponseController(w)
+	_ = rc.SetWriteDeadline(time.Now().Add(BusWait + 5*time.Second))
+	var d net.Dialer
+	ctx, cancel := context.WithTimeout(r.Context(), BusWait)
+	defer cancel()
+	c, err := d.DialContext(ctx, "unix", s.L.BusSocket())
+	if err != nil {
+		fail(http.StatusServiceUnavailable, "no bus node on this machine")
+		s.logf("bus node: %v", err)
+		return
+	}
+	defer c.Close()
+	stop := context.AfterFunc(ctx, func() { c.SetDeadline(time.Now()) })
+	defer stop()
+	req, _ := json.Marshal(struct {
+		Op   string          `json:"op"`
+		Peer json.RawMessage `json:"peer"`
+	}{"peer", env})
+	if _, err := c.Write(append(req, '\n')); err != nil {
+		fail(http.StatusBadGateway, "the bus node didn't take the call")
+		return
+	}
+	line, err := io.ReadAll(io.LimitReader(c, MaxBusCall+1))
+	if err != nil || len(line) > MaxBusCall {
+		fail(http.StatusBadGateway, "the bus node didn't answer")
+		return
+	}
+	var rep struct {
+		Error     string          `json:"error"`
+		PeerReply json.RawMessage `json:"peer_reply"`
+	}
+	if err := json.Unmarshal(line, &rep); err != nil {
+		fail(http.StatusBadGateway, "the bus node's answer isn't one")
+		return
+	}
+	out := rep.PeerReply
+	if len(out) == 0 {
+		out, _ = json.Marshal(map[string]string{"error": rep.Error})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write(append(out, '\n'))
 }
 
 func (s *Server) catalog(w http.ResponseWriter, r *http.Request, peer, machine string, fail func(int, string)) {

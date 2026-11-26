@@ -832,8 +832,8 @@ wrapper's.
 Offices exchange placements today; the bus is for everything else they
 want to tell each other as it happens (a job started, a card was
 answered), without anyone polling. Its core is `pkg/bus`, which other
-programs import, and `office bus` serves it on each machine. Replication
-between regions comes in a later piece; this is what it builds on.
+programs import, and `office bus` serves it on each machine and replicates
+it between regions.
 
 - **One log per producer.** A producer is a region's seat
   (`<region>/<seat>`) or a service with a bare name. It numbers its own
@@ -908,6 +908,36 @@ between regions comes in a later piece; this is what it builds on.
   picks up there. In dev mode the peer is always the invoking user, so
   `OFFICE_BUS_AS` names the seat; root mode refuses it. Reading the peer is
   Linux-only so far: elsewhere, root mode refuses the connection.
+- **Replication between regions.** A node exchanges events with each peer
+  whose entry has an `address` and something to exchange, over the
+  machine's transport: with `dir` the address is the peer's var directory
+  and the call goes to its node's socket; with `http` it's the peer's
+  `office serve`, which hands `POST /bus/peer` to its own node. Two calls
+  carry everything. A **push** sends the peer what it may read, as soon as
+  this node's log grows. A **pull** asks it for what it may publish here,
+  and long-polls (up to 20 s) until it has something, so neither way waits
+  on a timer. The side that can reach the other makes both calls, and its
+  peer only answers: a machine behind a firewall needs no inbound port. If
+  both can reach each other, both do; a resend is a duplicate and is
+  dropped. Each call is signed with the calling region's key (namespace
+  `bus-peer`) and names both regions and its time (five minutes either
+  way), and a call is answered once, so the answering node knows who is
+  asking without trusting the transport, and a copied pull hands nothing
+  over. The rules are checked on both sides: the sender sends only what the
+  peer's `may_read` allows (never a private topic, never the peer's own
+  events), and the receiver verifies each record's signature and seal
+  against its pinned keys (a peer's region key seals its events and signs
+  for its seats) and keeps only what the peer's `may_publish` allows. Each
+  peering keeps two vector cursors in `<var>/bus/peers/<peer>.json`: what
+  the peer has had from here, and what this node has read from it, both
+  past what the rules skipped, so a restart resumes. A refused record still
+  moves the cursor (it would be refused again); a failed call doesn't, and
+  is tried again from one second, doubling to 30. A peer below a floor
+  gets what is still kept and is told what retention dropped (the `gap`):
+  a replica has no snapshot to resync from. `office bus status` shows each
+  peering's cursors and its last error. Only a peer's own events cross for
+  now: an event of a third region is refused unless its key is pinned here
+  too.
 
 ## The worktree-group hazard
 

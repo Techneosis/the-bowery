@@ -9,6 +9,8 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -75,9 +77,17 @@ func busServe(args []string) {
 	// The node signs its seats' events and seals them with the region key,
 	// under two namespaces: a seat has no key of its own on this machine,
 	// and the node is what vouches that the seat said it.
+	// Each peer's pinned region key: it signs the peer's calls, seals its
+	// events and signs for its seats, as this region's does here.
+	peerKeys := bus.PeerKeys{}
+	for name, p := range reg.Peers {
+		if pk, err := offices.ParsePublicKey(p.Key); err == nil {
+			peerKeys[name] = pk
+		}
+	}
 	n, err := bus.NewNode(bus.NodeConfig{
 		Dir: layout.BusLog(), Region: reg.Region, Rules: bus.RulesOf(reg),
-		Sign: key, Seal: key, Dev: layout.Dev, Now: now,
+		Sign: key, Seal: key, Peers: peerKeys, Dev: layout.Dev, Now: now,
 	})
 	if err != nil {
 		die("%v", err)
@@ -128,6 +138,31 @@ func busServe(args []string) {
 			}
 		}()
 	}
+	// Replicate with every peer this machine can reach (one with an
+	// address) and has something to exchange with. A peer with no address
+	// reaches this node instead: it makes both calls, and this node
+	// answers them.
+	for _, name := range sortedPeers(reg) {
+		p := reg.Peers[name]
+		push, pull := len(p.MayRead) > 0, len(p.MayPublish) > 0
+		if p.Address == "" || peerKeys[name].Key == nil || (!push && !pull) {
+			continue
+		}
+		var link bus.Link
+		switch m.Transport {
+		case "http":
+			link = bus.HTTPLink{URL: p.Address}
+		case "", "dir":
+			link = bus.SocketLink{Path: filepath.Join(p.Address, "bus", "node.sock")}
+		default:
+			logf("peer %s: transport %q has no bus link in this build (dir, http)", name, m.Transport)
+			continue
+		}
+		go n.Replicate(ctx, bus.Peering{
+			Peer: name, Link: link, StateFile: filepath.Join(layout.BusDir(), "peers", name+".json"),
+			Push: push, Pull: pull, Logf: logf,
+		})
+	}
 	go func() {
 		for {
 			if d, err := n.Compact(); err != nil {
@@ -166,6 +201,15 @@ func busServe(args []string) {
 			n.Serve(c, seat)
 		}()
 	}
+}
+
+func sortedPeers(reg *offices.Region) []string {
+	out := make([]string, 0, len(reg.Peers))
+	for name := range reg.Peers {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // busRequest sends one request to the node and returns its replies.
@@ -338,5 +382,15 @@ func busStatus(args []string) {
 		{"followers", strconv.FormatInt(s.Followers, 10)}, {"socket", layout.BusSocket()},
 	} {
 		fmt.Printf("%-10s%s\n", l[0], l[1])
+	}
+	for _, p := range s.Peers {
+		line := fmt.Sprintf("%s: pushed %s, pulled %s", p.Peer, dash(p.Pushed), dash(p.Pulled))
+		if p.Error != "" {
+			line += " (last error " + p.ErrorAt.Format(time.RFC3339) + ": " + p.Error + ")"
+		}
+		if p.Gap != "" {
+			line += " (retention dropped before it was had: " + p.Gap + ")"
+		}
+		fmt.Printf("%-10s%s\n", "peer", line)
 	}
 }

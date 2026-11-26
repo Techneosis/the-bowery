@@ -44,6 +44,10 @@ type NodeConfig struct {
 	// Keys are any further keys pinned (peers' producers and regions);
 	// this region's own seats and seal are pinned from Sign and Seal.
 	Keys Keys
+	// Peers are the peer regions this node replicates with, each by its
+	// pinned region key: it authenticates their calls, seals their events
+	// and signs for their seats.
+	Peers PeerKeys
 	// Buffer is a follower's buffer (default DefaultBuffer), and Stall how
 	// long it may stay full (default DefaultStall) before the follower is
 	// told where to resume from and let go. A reader that keeps reading
@@ -68,12 +72,18 @@ type Node struct {
 	wakeMu    sync.Mutex
 	wake      chan struct{}
 	followers atomic.Int64
+
+	seenMu  sync.Mutex
+	seen    map[string]time.Time // peer calls answered, until they'd be stale
+	peersMu sync.Mutex
+	peers   map[string]*peering
 }
 
 type nodeKeys struct {
 	region     string
 	sign, seal PublicKey
 	more       Keys
+	peers      PeerKeys
 }
 
 func (k nodeKeys) ProducerKeys(p string) []PublicKey {
@@ -84,7 +94,7 @@ func (k nodeKeys) ProducerKeys(p string) []PublicKey {
 	if k.more != nil {
 		out = append(out, k.more.ProducerKeys(p)...)
 	}
-	return out
+	return append(out, k.peers.ProducerKeys(p)...)
 }
 
 func (k nodeKeys) RegionKeys(r string) []PublicKey {
@@ -95,7 +105,7 @@ func (k nodeKeys) RegionKeys(r string) []PublicKey {
 	if k.more != nil {
 		out = append(out, k.more.RegionKeys(r)...)
 	}
-	return out
+	return append(out, k.peers.RegionKeys(r)...)
 }
 
 // NewNode opens the node's log. One node serves a directory: a second one
@@ -113,6 +123,9 @@ func NewNode(cfg NodeConfig) (*Node, error) {
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
+	if _, ok := cfg.Peers[cfg.Region]; ok {
+		return nil, fmt.Errorf("region %s can't be its own peer", cfg.Region)
+	}
 	if err := os.MkdirAll(cfg.Dir, 0o700); err != nil {
 		return nil, err
 	}
@@ -125,7 +138,7 @@ func NewNode(cfg NodeConfig) (*Node, error) {
 		lock.Close()
 		return nil, fmt.Errorf("another node is serving %s", cfg.Dir)
 	}
-	log, err := OpenLog(cfg.Dir, nodeKeys{region: cfg.Region, sign: cfg.Sign.Public, seal: cfg.Seal.Public, more: cfg.Keys})
+	log, err := OpenLog(cfg.Dir, nodeKeys{region: cfg.Region, sign: cfg.Sign.Public, seal: cfg.Seal.Public, more: cfg.Keys, peers: cfg.Peers})
 	if err != nil {
 		lock.Close()
 		return nil, err
@@ -212,7 +225,7 @@ func (n *Node) Publish(seat string, p Publication) (Record, error) {
 
 // Request is one connection's one request: a line of JSON.
 type Request struct {
-	Op string `json:"op"` // publish, follow, status
+	Op string `json:"op"` // publish, follow, status; peer for a peer region's call
 	// As names the seat in dev mode; otherwise the socket's peer is the seat.
 	As          string       `json:"as,omitempty"`
 	Publication *Publication `json:"publication,omitempty"`
@@ -221,6 +234,9 @@ type Request struct {
 	Cursor string   `json:"cursor,omitempty"`
 	Topics []string `json:"topics,omitempty"`
 	Once   bool     `json:"once,omitempty"`
+	// Peer is a peer region's signed call (op peer): the signature, not
+	// the socket's user, says who is calling.
+	Peer *PeerEnvelope `json:"peer,omitempty"`
 }
 
 // Status is what a seat sees of the node.
@@ -233,6 +249,8 @@ type Status struct {
 	MayPublish []string `json:"may_publish"`
 	MayRead    []string `json:"may_read"`
 	Followers  int64    `json:"followers"`
+	// Peers are the peerings' cursors and last word.
+	Peers []PeerState `json:"peers"`
 }
 
 // Reply is one line back. A follow sends records, one caught_up once its
@@ -247,6 +265,8 @@ type Reply struct {
 	Cursor   string           `json:"cursor,omitempty"`
 	End      string           `json:"end,omitempty"`
 	Status   *Status          `json:"status,omitempty"`
+	// PeerReply answers op peer.
+	PeerReply *PeerReply `json:"peer_reply,omitempty"`
 }
 
 const writeTimeout = 30 * time.Second
@@ -276,8 +296,8 @@ func recordReply(r Record) (Reply, error) {
 func (n *Node) Serve(c net.Conn, seat string) {
 	defer c.Close()
 	c.SetReadDeadline(time.Now().Add(10 * time.Second))
-	rd := bufio.NewReaderSize(c, 4096)
-	line, err := rd.ReadSlice('\n')
+	rd := bufio.NewReaderSize(c, 64<<10)
+	line, err := readLine(rd, MaxPeerCall)
 	if err != nil {
 		writeReply(c, Reply{Error: "no request: one line of JSON"})
 		return
@@ -288,6 +308,23 @@ func (n *Node) Serve(c net.Conn, seat string) {
 		return
 	}
 	c.SetReadDeadline(time.Time{})
+	if req.Op == "peer" {
+		if req.Peer == nil {
+			writeReply(c, Reply{Error: "peer needs a signed call"})
+			return
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		go func() {
+			// The caller hanging up ends a long-poll.
+			if _, err := rd.ReadByte(); err != nil {
+				cancel()
+			}
+		}()
+		rep := n.HandlePeer(ctx, *req.Peer)
+		writeReply(c, Reply{PeerReply: &rep})
+		return
+	}
 	if req.As != "" && req.As != seat {
 		if !n.cfg.Dev {
 			writeReply(c, Reply{Error: "as is for dev mode only: the seat is the socket's Unix user"})
@@ -317,6 +354,7 @@ func (n *Node) Serve(c net.Conn, seat string) {
 			Region: n.cfg.Region, Seat: seat, Producer: n.Producer(seat),
 			Heads: n.log.Heads().String(), Floors: n.log.Floors().String(),
 			MayPublish: nonNil(t.Publish), MayRead: nonNil(t.Read), Followers: n.followers.Load(),
+			Peers: n.PeerStatus(),
 		}})
 	case "follow":
 		n.follow(c, rd, seat, req)

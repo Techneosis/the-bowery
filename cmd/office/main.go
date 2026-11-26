@@ -59,7 +59,9 @@ const usage = `office: the office host. Opens and closes offices, judges placeme
                                            GET /catalog/<peer>; binds the machine file's listen
   office bus serve                         the region's local bus node: a unix socket under the var
                                            directory; its peer's Unix user is the seat, the region
-                                           file's [bus.seats] say what that seat may publish and read
+                                           file's [bus.seats] say what that seat may publish and read;
+                                           it replicates with each peer that has an address (push and
+                                           pull, signed, within may_read / may_publish)
   office bus publish <topic> [--owner O,..] [--subject JSON] [--actor JSON] [--data JSON]
                      [--cause PRODUCER:SEQ] [--json]
                                            publish as your seat: the node signs and seals it

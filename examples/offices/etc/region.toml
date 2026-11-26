@@ -35,7 +35,9 @@ may_view  = []
 # The bus topics region-b may publish into this region, and read from it.
 # Default none. A pattern is "*", a prefix like "job.*" (whole parts, any
 # depth) or one topic exactly. Both nodes check: what leaves here is checked
-# against may_read, what arrives against may_publish.
+# against may_read, what arrives against may_publish. With an address, this
+# machine's `office bus serve` pushes and pulls the peer's node itself; a
+# peer this machine can't reach (no address) makes both calls to it instead.
 may_publish = ["job.*"]
 may_read    = ["card.answered"]
 [[peers.region-b.rules]]
