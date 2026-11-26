@@ -217,7 +217,12 @@ class TheDoneWhen(Regions):
         a = self.events(self.REVIEWS, "launched")[0]["stages"]
         self.assertEqual(a["resolve"], b["resolve"])
         self.assertEqual(a["sign"], b["sign"])
-        timeline = [b[k] for k in STAGES_B] + [a[k] for k in STAGES_A]
+        # "sent" is bowery's stamp after the send returns, and the office may
+        # take the letter in before that (seen on macOS: delivered 9ms ahead
+        # of sent), so it is ordered after "send" only, not before
+        # "delivered".
+        self.assertLessEqual(b["send"], b["sent"])
+        timeline = [b[k] for k in STAGES_B if k != "sent"] + [a[k] for k in STAGES_A]
         self.assertEqual(timeline, sorted(timeline))
 
         # The peer rule judged it, as a peer's.
