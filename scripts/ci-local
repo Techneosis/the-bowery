@@ -84,11 +84,19 @@ else
 fi
 
 # Fail fast: the first side to fail stops the rest.
-rc=0 left=${#pids[@]}
-while [ "$left" -gt 0 ]; do
-  wait -n -p done "${pids[@]}"; r=$?
-  left=$((left - 1))
-  for i in "${!pids[@]}"; do [ "${pids[$i]}" = "$done" ] && who=${names[$i]}; done
+# Each side is waited for once: a reported pid leaves the list, because bash
+# 5.3's `wait -n` hands an already-reported job back again (its old status)
+# while its pid is still named, and the other side's failure went unseen.
+rc=0 left=("${!pids[@]}")
+while [ "${#left[@]}" -gt 0 ]; do
+  waiting=()
+  for i in "${left[@]}"; do waiting+=("${pids[$i]}"); done
+  wait -n -p done "${waiting[@]}"; r=$?
+  rest=()
+  for i in "${left[@]}"; do
+    if [ "${pids[$i]}" = "$done" ]; then who=${names[$i]}; else rest+=("$i"); fi
+  done
+  left=("${rest[@]}")
   if [ "$r" -eq 0 ]; then
     echo "ci-local: $who passed ($(grep -E '^test-suite: ran' "$logs/$who.log" | tail -1))"
   else

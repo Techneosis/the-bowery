@@ -341,7 +341,9 @@ class TheDoneWhen(Offices):
         res = self.probe(self.REVIEWS, self.job())
         self.assertLess(time.monotonic() - t0, 5)
         self.assertEqual(res["verdict"], "closed")
-        self.assertIn("rule flag failed: no answer in time", res["reason"])
+        # On a loaded machine python's start-up can pass 500ms in the plugin's
+        # describe already: killed there or in the check, it's the same close.
+        self.assertRegex(res["reason"], r"rule flag failed: (describe: )?no answer in time")
 
     def test_every_verdict_is_logged_one_line_per_instance(self):
         rules = self.flag_rule("one") + self.flag_rule("two") + textwrap.dedent("""
