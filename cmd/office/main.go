@@ -64,12 +64,20 @@ const usage = `office: the office host. Opens and closes offices, judges placeme
                                            pull, signed, within may_read / may_publish)
   office bus publish <topic> [--owner O,..] [--subject JSON] [--actor JSON] [--data JSON]
                      [--cause PRODUCER:SEQ] [--json]
-                                           publish as your seat: the node signs and seals it
+                                           publish as your seat: the node signs and seals it;
+                                           --topic T is the same as <topic>. A private.card,
+                                           .request, .ticket, .hide or .note is checked against
+                                           its schema first, and a shared topic may not name a
+                                           private/ key
   office bus follow [--cursor C] [--topic T,..] [--once]
                                            the records your seat may read past the cursor, one JSON
                                            line each, as they arrive; exit 3 means the node let go of
                                            a reader that fell behind: resume from the cursor it names
   office bus status [--json]               the node's heads and floors, and your seat's topics
+  office private ls [--type T] [--json]    the private projection: every private.* record your
+                                           seat reads, folded into cards, requests, tickets, hides
+                                           and notes (--json: the snapshot, the shape a board draws)
+  office private show <key> [--json]       one of them (private/ optional)
   office version
 
 --until takes an RFC 3339 time or a duration from now (90m, 24h).
@@ -142,6 +150,8 @@ func main() {
 		cmdServe(rest)
 	case "bus":
 		cmdBus(rest)
+	case "private":
+		cmdPrivate(rest)
 	default:
 		die("unknown command %s (office --help)", cmd)
 	}

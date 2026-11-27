@@ -92,7 +92,7 @@ class Bus(Offices):
         self.assertIn("BEGIN SSH SIGNATURE", rec["sig"])
         self.assertIn("BEGIN SSH SIGNATURE", rec["seal"])
         self.assertEqual(self.bus_ok("publish", "job.done", "--cause", "region-a/alice:1").strip(), "region-a/alice:2")
-        self.bus_ok("publish", "private.note", "--data", '{"n":1}')
+        self.bus_ok("publish", "private.note", "--data", '{"on":"j-1","text":"t"}')
 
         got = self.records(self.bus_ok("follow", "--once"))
         self.assertEqual([r["event"]["seq"] for r in got], [1, 2, 3])
@@ -177,6 +177,60 @@ class Bus(Offices):
         r = self.office("bus", "serve")
         self.assertEqual(r.returncode, 1)
         self.assertIn("isn't region region-a's key", r.stderr)
+
+    def test_private_projection(self):
+        """office bus publish --topic private.card checks the card schema;
+        office private ls|show read the fold of the seat's private.*."""
+        self.serve()
+        out = self.bus_ok("publish", "--topic", "private.card", "--data",
+                          '{"key":"watching","subject":"Things I\'m watching","refs":["key:shared-1"]}')
+        self.assertEqual(out.strip(), "region-a/alice:1")
+        self.bus_ok("publish", "--topic", "private.request", "--data", '{"key":"mine","title":"My grouping"}')
+        self.bus_ok("publish", "private.card", "--data", '{"key":"watching","state":"done"}')
+        # The schema is checked before anything reaches the node.
+        for data, why in [('{"nope":1}', "nope"), ('{}', "subject"),
+                          ('{"subject":"x","links":[{"url":"javascript:x"}]}', "http")]:
+            with self.subTest(data=data):
+                r = self.bus("publish", "--topic", "private.card", "--data", data)
+                self.assertEqual(r.returncode, 1, r.stdout)
+                self.assertIn(why, r.stderr)
+        r = self.bus("publish", "private.thing", "--data", "{}")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("private.card", r.stderr)
+        r = self.bus("publish", "job.started", "--topic", "job.done")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("one topic", r.stderr)
+        # Shared never points at private.
+        r = self.bus("publish", "job.started", "--data", '{"about":"private/watching"}')
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("private", r.stderr)
+
+        snap = json.loads(self.office_ok("private", "ls", "--json", env={"OFFICE_BUS_AS": "alice"}))
+        self.assertEqual(snap["v"], 1)
+        self.assertEqual(snap["cursor"], "region-a/alice=3")
+        self.assertEqual(sorted(snap["lists"]), ["card", "hide", "note", "request", "ticket"])
+        [card] = snap["lists"]["card"]
+        self.assertEqual(card["key"], "private/watching")
+        self.assertEqual((card["v"]["subject"], card["v"]["state"], card["v"]["private"]),
+                         ("Things I'm watching", "done", True))
+        # Replayed twice, the same bytes.
+        self.assertEqual(self.office_ok("private", "ls", "--json", env={"OFFICE_BUS_AS": "alice"}),
+                         self.office_ok("private", "ls", "--json", env={"OFFICE_BUS_AS": "alice"}))
+        out = self.office_ok("private", "ls", env={"OFFICE_BUS_AS": "alice"})
+        self.assertIn("private/watching", out)
+        self.assertIn("Things I'm watching", out)
+        self.assertIn("private/mine", out)
+        out = self.office_ok("private", "ls", "--type", "request", env={"OFFICE_BUS_AS": "alice"})
+        self.assertNotIn("private/watching", out)
+        self.assertIn("private/mine", out)
+        shown = json.loads(self.office_ok("private", "show", "watching", "--json", env={"OFFICE_BUS_AS": "alice"}))
+        self.assertEqual((shown["type"], shown["key"], shown["v"]["refs"]), ("card", "private/watching", ["key:shared-1"]))
+        r = self.office("private", "show", "private/nothing", env={"OFFICE_BUS_AS": "alice"})
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("no private record", r.stderr)
+        # bob reads no private.*: his fold is empty, not an error.
+        snap = json.loads(self.office_ok("private", "ls", "--json", env={"OFFICE_BUS_AS": "bob"}))
+        self.assertEqual(snap["lists"]["card"], [])
 
     def test_a_stale_socket_is_replaced(self):
         (self.var / "bus").mkdir(parents=True)

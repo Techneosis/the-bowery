@@ -899,6 +899,24 @@ it between regions.
   sides: before an event leaves for a peer, and again when one arrives, so
   a peer's own rules can't widen this region's. A bad pattern fails the
   region file, like any other bad value, and `office check` says which.
+- **The private projection.** `private.card`, `private.request`,
+  `private.ticket`, `private.hide` and `private.note` are a region's
+  private records, and `bus.PrivateFold` folds them into the keyed
+  snapshot a board's client draws (`{v, cursor, meta, lists}`, each entry
+  `{key, v}`; `office private ls --json`). Each record's key gets the
+  `private/` prefix, so one can't pass for a shared key. A record merges
+  over the ones before it for its key, in (at, producer, seq) order, and
+  `remove` (`undo` for a hide) starts the key afresh, so the fold is the
+  same whatever order the records came in and however often a reader
+  saw one: replayed twice, the same bytes. `bus.CheckPrivate` is each
+  topic's schema; `office bus publish` checks it before the node has the
+  record, and the fold skips, and names in `meta.skipped`, a record that
+  fails it. Private points at shared, never the reverse: a private
+  record's `refs`, `members`, `under`, `on` and hide name any key, and a
+  node refuses a shared topic's event that names a `private/` key
+  anywhere in it (`bus.NamesPrivate`). Private records are kept like any
+  other topic's (30 days by default): a region that wants them kept
+  longer says so in `[bus.retain]`.
 - **Retention per topic.** Events are kept 30 days unless `[bus] retention`
   or a pattern in `[bus.retain]` says otherwise (the most specific pattern
   wins). Compaction rewrites a producer's log without what's past its time
