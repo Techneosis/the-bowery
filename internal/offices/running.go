@@ -529,9 +529,18 @@ func surfaceCmd(c *Config, r *Running, which string, env map[string]string) (int
 // nothing it started outlives it unasked. It returns the exit code and the
 // group's id, which a job started this way keeps for the owner's stop.
 func runSurface(c *Config, s Surface, argv []string, stdin []byte, id, surface string, extra map[string]string) (int, int, error) {
+	return runSurfaceTo(c, s, argv, stdin, id, surface, extra, nil)
+}
+
+// runSurfaceTo is runSurface with the surface's stderr written to stderr (a
+// file, never a pipe: see stderrFile); nil discards it.
+func runSurfaceTo(c *Config, s Surface, argv []string, stdin []byte, id, surface string, extra map[string]string, stderr *os.File) (int, int, error) {
 	timeout := Duration(s.Timeout, time.Minute)
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Stdin = bytes.NewReader(stdin)
+	if stderr != nil {
+		cmd.Stderr = stderr
+	}
 	cmd.Env = surfaceEnv(c, id, surface, extra)
 	cmd.Dir = "/"
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
