@@ -147,11 +147,20 @@ type FactProvider struct {
 // finish-turn, stop-next-turn, or now for the owner's close --now) and
 // OFFICE_REASON in its environment. A surface without them still has its
 // jobs marked held; the office host just can't tell the agent.
+//
+// Attach is how a pull loop that starts again picks up a running job whose
+// process group is gone: what the surface left running for it (a watcher)
+// died with the loop's last process tree (a service restart that kills its
+// whole cgroup). It gets the job as JSON on stdin, runs in a group of its
+// own like the rest, and whatever it leaves running in that group becomes
+// the job's group. A surface without it keeps an empty group as it is: its
+// agent may live outside the group.
 type Surface struct {
 	Command []string `toml:"command"`
 	Hold    []string `toml:"hold"`
 	Resume  []string `toml:"resume"`
 	Stop    []string `toml:"stop"`
+	Attach  []string `toml:"attach"`
 	// Timeout is how long any of its commands may take (default 1m); then
 	// its process group is killed.
 	Timeout string `toml:"timeout"`
