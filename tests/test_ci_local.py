@@ -48,6 +48,17 @@ def write_exe(path, text):
     path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
 
+def bash_has_wait_p():
+    """ci-local needs bash 5.1's `wait -n -p`; the bash on PATH may be older
+    (macOS ships 3.2, and so do GitHub's macOS runners)."""
+    try:
+        return subprocess.run(["bash", "-c", "sleep 0 & wait -n -p p $!"], capture_output=True,
+                              timeout=10).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+@unittest.skipUnless(bash_has_wait_p(), "the bash on PATH has no `wait -n -p` (needs 5.1+), which ci-local needs")
 class CiLocal(unittest.TestCase):
     def setUp(self):
         self.tmp = pathlib.Path(tempfile.mkdtemp(prefix="ci-local-test."))
