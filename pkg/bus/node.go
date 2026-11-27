@@ -205,6 +205,9 @@ func (n *Node) Publish(seat string, p Publication) (Record, error) {
 	if !n.cfg.Rules.SeatAllowed(seat, p.Kind, Publish) {
 		return Record{}, fmt.Errorf("seat %s may not publish %s (the region file's bus.seats.%s.publish)", seat, p.Kind, seat)
 	}
+	if !n.cfg.Rules.Private(p.Kind) && (NamesPrivate(p.Subject) || NamesPrivate(p.Actor) || NamesPrivate(p.Data)) {
+		return Record{}, fmt.Errorf("%s: %w", p.Kind, errNamesPrivate)
+	}
 	n.pubMu.Lock()
 	producer := n.Producer(seat)
 	e := Event{

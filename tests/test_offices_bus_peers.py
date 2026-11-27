@@ -131,7 +131,7 @@ class Peers(one_node.Bus):
         self.serve_b()
         start = time.monotonic()
         self.bus_ok("publish", "job.started")
-        self.bus_ok("publish", "private.note")
+        self.bus_ok("publish", "private.note", "--data", '{"on":"j-1","text":"t"}')
         self.b_bus("publish", "card.answered")
         self.b_bus("publish", "gate.decided")  # region-a doesn't let region-b read it in
         # Neither way waits on a timer: a push follows the publish, a pull

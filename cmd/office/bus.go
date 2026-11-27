@@ -270,12 +270,19 @@ func splitList(v string) []string {
 }
 
 func busPublish(args []string) {
-	f := parse(args, []string{"--owner", "--subject", "--actor", "--data", "--cause"}, []string{"--json"})
-	if f.office == "" {
+	f := parse(args, []string{"--topic", "--owner", "--subject", "--actor", "--data", "--cause"}, []string{"--json"})
+	kind := f.office
+	if t, ok := f.vals["--topic"]; ok {
+		if kind != "" && kind != t {
+			die("bus publish takes one topic: %s or --topic %s", kind, t)
+		}
+		kind = t
+	}
+	if kind == "" {
 		die("bus publish: which topic? (office bus publish job.started)")
 	}
 	p := bus.Publication{
-		Kind: f.office, Owners: splitList(f.vals["--owner"]),
+		Kind: kind, Owners: splitList(f.vals["--owner"]),
 		Subject: jsonFlag(f, "--subject"), Actor: jsonFlag(f, "--actor"), Data: jsonFlag(f, "--data"),
 	}
 	if v, ok := f.vals["--cause"]; ok {
@@ -289,6 +296,13 @@ func busPublish(args []string) {
 			die("--cause takes producer:seq (region-a/desk:12), not %q", v)
 		}
 		p.Cause = &bus.Ref{Producer: v[:i], Seq: seq}
+	}
+	// A private record is checked against its schema here, before the
+	// node has it: the projection would only skip it.
+	if strings.HasPrefix(kind, "private.") {
+		if err := bus.CheckPrivate(kind, p.Data); err != nil {
+			die("%v", err)
+		}
 	}
 	r, ok := busReply(busRequest(bus.Request{Op: "publish", Publication: &p}))
 	switch {
