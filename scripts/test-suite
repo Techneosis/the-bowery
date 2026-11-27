@@ -74,7 +74,10 @@ for p in "${pids[@]}"; do wait "$p" || rc=1; done
 
 total=$(cat "$logs"/shard-*.log | grep -E '^Ran [0-9]+ tests' | awk '{n += $2} END {print n + 0}')
 for f in "$logs"/shard-*.log; do
-  if ! tail -3 "$f" | grep -qE '^OK( \(.*\))?$'; then
+  # unittest's verdict is the line after its last "Ran N tests". Look for it
+  # there, not in the last few lines: a test's own stdout is flushed when the
+  # process exits, after the verdict, and two such lines buried it once.
+  if ! awk '/^Ran [0-9]+ tests? in /{after=1; ok=0; next} after && /^OK( \(.*\))?$/{ok=1} END{exit !ok}' "$f"; then
     echo; echo "== $(basename "$f" .log) FAILED:"; grep -E '^(FAIL|ERROR):' "$f"; tail -40 "$f"; rc=1
   fi
 done
