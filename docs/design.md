@@ -673,6 +673,18 @@ surface's `stop` and kills the job's process group. Owner and agent never
 talk directly: only the pull job, as the office, touches the office's
 agents.
 
+What a surface leaves running for a job (a watcher that follows its agent)
+lives in the pull loop's process tree, so a service manager that ends the
+loop's whole tree on a restart (systemd's `KillMode=control-group`) ends it
+too, and the job's record is left with a group nothing is in. So the loop's
+first act when it starts is to re-attach: for each running job whose group
+is gone and whose surface has an `attach` command, it runs that command
+(the job on stdin, `OFFICE_JOB_STATE` in its environment) and the job's
+record takes the new group (`pgid`, and `reattached` counts the times),
+logged `reattached`; a failure is `attach-failed`, with smoke, and the job
+stays as it was. A surface without `attach` is left alone, since its agent
+may live outside the group.
+
 Repeated identical run-phase verdicts for one job and instance collapse:
 the first is logged when it comes; the repeats become one line with
 `count`, `first` and `last` when the verdict changes or the job ends.

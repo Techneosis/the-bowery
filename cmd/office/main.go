@@ -618,6 +618,14 @@ func cmdPull(args []string) {
 		ctx, cancel = context.WithTimeout(ctx, dur("--for", 0))
 		defer cancel()
 	}
+	// A loop that starts again may have lost what its surfaces left running
+	// (a service restart ends the whole process tree): re-attach those jobs
+	// before the first pass, so none of them stays orphaned.
+	if items, err := offices.Reattach(load(f.office)); err != nil {
+		die("%v", err)
+	} else if len(items) > 0 {
+		report(&offices.PullReport{Office: c.Office.Name, Run: items})
+	}
 	facts := offices.NewFacts() // provider readings live as long as the loop
 	for {
 		c = load(f.office) // a re-installed record or machine file takes effect on the next pass

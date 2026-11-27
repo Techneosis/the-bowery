@@ -39,11 +39,14 @@ mem_available_gb = "mem_available_gb"
 # and runs as the office (the pull job's user), in its own process group.
 # hold, resume and stop are how the office asks a running job to yield,
 # carry on and end (OFFICE_ON_CLOSED, OFFICE_REASON in the environment).
+# attach (optional) is run when a pull loop starts, for each running job
+# whose process group is gone: what it leaves running becomes the job's group.
 [surfaces.reviewer]
 command = ["/usr/local/lib/offices/surfaces/reviewer", "start"]
 hold    = ["/usr/local/lib/offices/surfaces/reviewer", "hold"]
 resume  = ["/usr/local/lib/offices/surfaces/reviewer", "resume"]
 stop    = ["/usr/local/lib/offices/surfaces/reviewer", "stop"]
+attach  = ["/usr/local/lib/offices/surfaces/reviewer", "attach"]
 timeout = "1m"
 
 # Rule instances for every office on this machine:

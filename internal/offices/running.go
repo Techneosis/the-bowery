@@ -38,6 +38,9 @@ type Running struct {
 	Yielded  string `json:"yielded,omitempty"` // when the job said it reached its safe point
 	Resumed  int    `json:"resumed,omitempty"`
 	Pgid     int    `json:"pgid,omitempty"` // the process group its surface started it in
+	// Reattached counts the times a pull loop's start gave it a new group
+	// through its surface's attach command, after its old one was gone.
+	Reattached int `json:"reattached,omitempty"`
 }
 
 func (l Layout) RunningDir(o string) string  { return filepath.Join(l.Var, o, "running") }
@@ -405,6 +408,83 @@ func RunPhase(c *Config, ev, accept *Evaluator) ([]RunItem, error) {
 			return nil, err
 		}
 		items = append(items, RunItem{ID: r.ID, Action: "resumed"})
+	}
+	return items, nil
+}
+
+// groupGone is whether nothing is left in a process group. A group we may
+// not signal (EPERM) still has something in it.
+func groupGone(pgid int) bool {
+	if pgid <= 1 {
+		return false // never known: nothing to say about it
+	}
+	return syscall.Kill(-pgid, 0) == syscall.ESRCH
+}
+
+// Reattach is a pull loop's first act when it starts: every running job
+// whose process group is gone (what its surface left running died with the
+// loop's last process tree, a service restart that ends its whole cgroup)
+// is given a new one through its surface's attach command, and its record
+// takes the new group, so the owner's stop and anything reading pgid see
+// the job's real processes. A surface without attach is left alone: its
+// agent may live outside the group. It holds the pull lock, so two loops
+// can't both attach a job.
+func Reattach(c *Config) ([]RunItem, error) {
+	unlock, err := c.Lock()
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	o := c.Office.Name
+	items := []RunItem{}
+	for _, r := range ReadRunning(c.L, o) {
+		r := r
+		s, ok := c.Machine.Surfaces[r.Surface]
+		if !ok || len(s.Attach) == 0 || !groupGone(r.Pgid) {
+			continue
+		}
+		var body []byte
+		if j, err := acceptedJob(c, r.ID); err == nil {
+			body, _ = json.Marshal(j)
+		} else {
+			body, _ = json.Marshal(r)
+		}
+		was := r.Pgid
+		code, pgid, err := runSurface(c, s, s.Attach, body, r.ID, r.Surface, map[string]string{"OFFICE_JOB_STATE": r.State})
+		if err != nil || code != 0 {
+			e := Entry{"event": "attach-failed", "job": r.ID, "surface": r.Surface, "was_pgid": was}
+			why := ""
+			if err != nil {
+				why = err.Error()
+				e["why"] = why
+			} else {
+				e["exit"] = code
+				why = fmt.Sprintf("exit %d", code)
+			}
+			e["alert"] = Alert{"smoke", "couldn't re-attach " + r.ID + " after its process group was gone: " + why}
+			if err := Append(c.L, o, e); err != nil {
+				return nil, err
+			}
+			items = append(items, RunItem{ID: r.ID, Action: "attach-failed", Reason: why})
+			continue
+		}
+		n := 0
+		if err := UpdateRunning(c.L, o, r.ID, func(cur *Running) error {
+			cur.Pgid = pgid
+			cur.Reattached++
+			n = cur.Reattached
+			return nil
+		}); err != nil {
+			// It ended while it was being attached (its done removed it):
+			// what attach started has no job to watch.
+			killGroup(pgid)
+			continue
+		}
+		if err := Append(c.L, o, Entry{"event": "reattached", "job": r.ID, "surface": r.Surface, "state": r.State,
+			"was_pgid": was, "pgid": pgid, "reattached": n}); err != nil {
+			return nil, err
+		}
+		items = append(items, RunItem{ID: r.ID, Action: "reattached"})
 	}
 	return items, nil
 }
