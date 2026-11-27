@@ -534,9 +534,11 @@ class Owner(Offices):
         self.office_ok("close", self.REVIEWS, "--scope", "acme")
         self.assertEqual(self.probe(self.REVIEWS, self.job())["verdict"], "open")
         self.assertEqual(self.probe(self.REVIEWS, self.job(scope="acme"))["verdict"], "closed")
-        self.office_ok("close", self.REVIEWS, "--until", "1s")
+        # Wide enough that a loaded machine still probes inside it (1s
+        # wasn't: the probe after the close ran past it at load 113).
+        self.office_ok("close", self.REVIEWS, "--until", "5s")
         self.assertEqual(self.probe(self.REVIEWS, self.job())["verdict"], "closed")
-        time.sleep(1.2)
+        time.sleep(5.2)
         self.assertEqual(self.probe(self.REVIEWS, self.job())["verdict"], "open")
 
     def test_describe_and_ls_show_holdings_state_and_verdicts(self):
