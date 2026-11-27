@@ -50,7 +50,7 @@ windows = ["Mon..Fri 18:00-23:00"]
 # this region, and what its local seats (by Unix user) may publish and read.
 [bus]
 retention = "720h"            # the default: 30 days
-private   = ["private.*"]     # never sent to a peer, whatever its may_read; no peer publishes into them
+private   = ["private.*"]     # never sent to a peer, whatever its may_read; no peer publishes into them (private.* is private even unlisted)
 
 [bus.retain]                  # per topic; the most specific pattern wins
 "job.*" = "168h"

@@ -892,7 +892,9 @@ it between regions.
   (whole parts, at any depth: not `jobs.started`), or one topic. Topics in
   `[bus] private` never leave the region, whatever a peer's `may_read`
   says, and no peer may publish into them; the region's own seats use them
-  like any other. The check is one library call, `Rules.Allowed(peer,
+  like any other. `private.*` is private in every region, listed or not
+  (`bus.AlwaysPrivate`), and a node that's sent one by a peer refuses it
+  and logs it, beside the refusal in its reply. The check is one library call, `Rules.Allowed(peer,
   kind, dir)` (and `SeatAllowed` for seats), and the node makes it on both
   sides: before an event leaves for a peer, and again when one arrives, so
   a peer's own rules can't widen this region's. A bad pattern fails the

@@ -88,6 +88,7 @@ func busServe(args []string) {
 	n, err := bus.NewNode(bus.NodeConfig{
 		Dir: layout.BusLog(), Region: reg.Region, Rules: bus.RulesOf(reg),
 		Sign: key, Seal: key, Peers: peerKeys, Dev: layout.Dev, Now: now,
+		Logf: func(format string, a ...any) { fmt.Fprintf(os.Stderr, "office bus: "+format+"\n", a...) },
 	})
 	if err != nil {
 		die("%v", err)

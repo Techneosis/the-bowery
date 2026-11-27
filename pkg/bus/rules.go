@@ -82,8 +82,16 @@ func RulesOf(r *offices.Region) Rules {
 	return out
 }
 
-// Private says whether a topic never leaves this region.
-func (r Rules) Private(kind string) bool { return r.PrivateTopics.Match(kind) }
+// AlwaysPrivate is private in every region, whatever its [bus] private
+// says: the owner's private work (cards, requests and tickets only on their
+// own machine) is never one forgotten line from leaving it.
+var AlwaysPrivate = Patterns{"private.*"}
+
+// Private says whether a topic never leaves this region: one of its
+// PrivateTopics, or private.*.
+func (r Rules) Private(kind string) bool {
+	return AlwaysPrivate.Match(kind) || r.PrivateTopics.Match(kind)
+}
 
 // Allowed says whether an event of this kind may go this way between this
 // region and a peer. A private topic never goes either way.

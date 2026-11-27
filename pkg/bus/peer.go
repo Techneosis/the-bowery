@@ -222,6 +222,7 @@ func (n *Node) takePush(c PeerCall) PeerReply {
 			continue
 		}
 		if !n.cfg.Rules.Allowed(c.From, r.Event.Kind, Publish) {
+			n.privateArrived(c.From, r)
 			refuse(fmt.Sprintf("%v: %s may not publish %s here", r.Ref(), c.From, r.Event.Kind))
 			continue
 		}
@@ -428,6 +429,15 @@ type Result struct {
 	More                                          bool
 }
 
+// privateArrived logs a private event a peer sent, which its node should
+// never have let go: the refusal is already in the reply, but the sender
+// may not read it, and this is the side whose privacy it was.
+func (n *Node) privateArrived(peer string, r Record) {
+	if n.cfg.Logf != nil && n.cfg.Rules.Private(r.Event.Kind) {
+		n.cfg.Logf("refused %v from %s: %s is a private topic, and private topics never cross regions", r.Ref(), peer, r.Event.Kind)
+	}
+}
+
 func (n *Node) sign(c PeerCall) (PeerEnvelope, error) {
 	c.From, c.At = n.cfg.Region, n.cfg.Now().UTC()
 	return SignPeerCall(c, n.cfg.Seal)
@@ -527,6 +537,7 @@ func (n *Node) PullOnce(ctx context.Context, p Peering, wait time.Duration) (Res
 	for _, raw := range rep.Records {
 		r, err := ParseLine(raw)
 		if err == nil && !n.cfg.Rules.Allowed(p.Peer, r.Event.Kind, Publish) {
+			n.privateArrived(p.Peer, r)
 			err = fmt.Errorf("%v: %s may not publish %s here", r.Ref(), p.Peer, r.Event.Kind)
 		}
 		var added bool
