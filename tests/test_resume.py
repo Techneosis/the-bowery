@@ -9,8 +9,19 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 
 from _fake import BOX, FAKES, Bed, sh
+
+
+def marked_process():
+    """A process carrying the OTHER_TOOL_TAG marker in its environment. It's
+    python, not /bin/sleep: macOS 26 hides an Apple platform binary's
+    environment from `ps -E` (even its owner's), so a marked sleep reads as
+    "can't read" there, never "carrying"."""
+    return subprocess.Popen([sys.executable, "-c", "import time; time.sleep(300)"],
+                            env={**os.environ, "OTHER_TOOL_TAG": "x-1"})
+
 
 NOTICE = "You were resumed: check what you already did before redoing anything."
 
@@ -383,7 +394,7 @@ class Resume(Bed):
         self.config.write_text('hands_off_env = ["OTHER_TOOL_TAG"]\n')
         a = self.dispatch("marked", "--cwd", self.repo)
         self.exit_to_shell("marked")
-        proc = subprocess.Popen(["sleep", "300"], env={**os.environ, "OTHER_TOOL_TAG": "x-1"})
+        proc = marked_process()
         self.addCleanup(proc.wait)
         self.addCleanup(proc.kill)
         with self.mutate() as s:
@@ -449,7 +460,7 @@ class Resume(Bed):
         self.dispatch("keep2", "--cwd", self.repo)
         a = self.dispatch("nb", "--cwd", self.repo)
         shell = self.split_off(a["pane_id"])
-        proc = subprocess.Popen(["sleep", "300"], env={**os.environ, "OTHER_TOOL_TAG": "x-1"})
+        proc = marked_process()
         self.addCleanup(proc.wait)
         self.addCleanup(proc.kill)
         with self.mutate() as s:
@@ -1299,7 +1310,7 @@ class RemoteResume(Resume.__base__):
         self.dispatch("bx", "--machine", BOX, "--as", "alice", "--cwd", "~/dev/app")
         rec = json.loads(self.records("bx")[0].read_text())
         self.exit_to_shell("bx", BOX)
-        proc = subprocess.Popen(["sleep", "300"], env={**os.environ, "OTHER_TOOL_TAG": "x-1"})
+        proc = marked_process()
         self.addCleanup(proc.wait)
         self.addCleanup(proc.kill)
         with self.mutate(BOX) as s:
