@@ -58,6 +58,10 @@ type NodeConfig struct {
 	// socket's peer is always the invoking user.
 	Dev bool
 	Now func() time.Time
+	// Logf is where the node says what it refused on arrival from a peer
+	// (a private topic above all), beside the reply the sender gets. nil:
+	// nowhere.
+	Logf func(format string, a ...any)
 }
 
 // Node is a region's local bus node: its own seats publish through it (it
