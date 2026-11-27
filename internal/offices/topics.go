@@ -2,6 +2,9 @@ package offices
 
 import (
 	"fmt"
+	"net"
+	"net/netip"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -22,6 +25,43 @@ type BusConfig struct {
 	// Seats are the topics this region's local seats may publish and read,
 	// keyed by Unix user.
 	Seats map[string]BusSeat `toml:"seats"`
+	// Web serves the private projection to the owner's browser (pkg/bus
+	// web.go), if it's set.
+	Web *BusWeb `toml:"web"`
+}
+
+// BusWeb is `[bus.web]`: the node's HTTPS endpoint on the tailnet, for its
+// owner's devices only.
+type BusWeb struct {
+	Listen string `toml:"listen"` // the tailnet address and port: an IP, never 0.0.0.0
+	Host   string `toml:"host"`   // the node's tailnet name: its certificate's, and the only Host served
+	Owner  string `toml:"owner"`  // the one tailnet login served (whois)
+	Origin string `toml:"origin"` // the board's origin, https://host[:port]: CORS and the Origin check
+	Seat   string `toml:"seat"`   // the local seat (a [bus.seats] user) a browser reads and publishes as
+	// Tailscaled is tailscaled's socket (default /run/tailscale/tailscaled.sock).
+	Tailscaled string `toml:"tailscaled"`
+}
+
+func checkWeb(file string, b BusConfig) error {
+	w := b.Web
+	host, port, err := net.SplitHostPort(w.Listen)
+	ip, perr := netip.ParseAddr(host)
+	if err != nil || port == "" || perr != nil || ip.IsUnspecified() {
+		return fmt.Errorf("%s: bus.web.listen: %q isn't an address and port on the tailnet (like 100.64.0.1:7450; never every address)", file, w.Listen)
+	}
+	if w.Host == "" || strings.ContainsAny(w.Host, ":/ ") {
+		return fmt.Errorf("%s: bus.web.host: %q isn't the node's tailnet name", file, w.Host)
+	}
+	if w.Owner == "" || strings.ContainsAny(w.Owner, " \t") {
+		return fmt.Errorf("%s: bus.web.owner: %q isn't a tailnet login", file, w.Owner)
+	}
+	if u, err := url.Parse(w.Origin); err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
+		return fmt.Errorf("%s: bus.web.origin: %q isn't one origin like https://board.example.ts.net", file, w.Origin)
+	}
+	if _, ok := b.Seats[w.Seat]; !ok {
+		return fmt.Errorf("%s: bus.web.seat: %s has no [bus.seats.%s]: the browser reads and publishes as a seat", file, w.Seat, w.Seat)
+	}
+	return nil
 }
 
 // BusSeat is one local seat's topics.
@@ -129,6 +169,11 @@ func checkBus(file string, r *Region) error {
 	for _, p := range b.Private {
 		if p == "*" {
 			return fmt.Errorf(`%s: bus.private: "*" would keep every topic in, and the bus would carry nothing`, file)
+		}
+	}
+	if b.Web != nil {
+		if err := checkWeb(file, b); err != nil {
+			return err
 		}
 	}
 	for user, s := range b.Seats {

@@ -3,10 +3,14 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"log"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -124,6 +128,9 @@ func busServe(args []string) {
 		ln.Close()
 	}()
 	logf := func(format string, a ...any) { fmt.Fprintf(os.Stderr, "office bus: "+format+"\n", a...) }
+	if reg.Bus.Web != nil {
+		serveWeb(ctx, n, *reg.Bus.Web, logf)
+	}
 	// Writers the node didn't see (another handle on the log) wake its
 	// followers through the log directory's watch; its backstop covers a
 	// platform with none.
@@ -202,6 +209,58 @@ func busServe(args []string) {
 			n.Serve(c, seat)
 		}()
 	}
+}
+
+// serveWeb serves the private projection to the owner's browser (the
+// region file's [bus.web]): HTTPS on the tailnet address, the certificate
+// and each caller's identity from tailscaled. The bus goes on without it:
+// a listen that fails (the tailnet not up yet at boot) is tried again.
+func serveWeb(ctx context.Context, n *bus.Node, cfg offices.BusWeb, logf func(string, ...any)) {
+	sock := cfg.Tailscaled
+	if sock == "" {
+		sock = bus.DefaultTailscaled
+	}
+	h, err := n.WebHandler(bus.WebConfig{
+		Host: cfg.Host, Owner: cfg.Owner, Origin: cfg.Origin, Seat: cfg.Seat, WhoIs: bus.TailscaleWhoIs(sock),
+	})
+	if err != nil {
+		die("%v", err)
+	}
+	cs := bus.NewTailscaleCert(cfg.Host, sock, filepath.Join(layout.BusDir(), "web.pem"), logf)
+	go cs.Run(ctx)
+	srv := &http.Server{
+		Handler:           h,
+		TLSConfig:         &tls.Config{GetCertificate: cs.GetCertificate, MinVersion: tls.VersionTLS12},
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       2 * time.Minute,
+		ErrorLog:          log.New(io.Discard, "", 0),
+	}
+	go func() {
+		<-ctx.Done()
+		srv.Close()
+	}()
+	go func() {
+		said := false
+		for ctx.Err() == nil {
+			ln, err := net.Listen("tcp", cfg.Listen)
+			if err != nil {
+				if !said {
+					logf("web: %v (trying again every 5s)", err)
+					said = true
+				}
+				select {
+				case <-ctx.Done():
+				case <-time.After(5 * time.Second):
+				}
+				continue
+			}
+			logf("web: private projection on https://%s (%s), for %s at %s", cfg.Host, cfg.Listen, cfg.Owner, cfg.Origin)
+			if err := srv.ServeTLS(ln, "", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				logf("web: %v", err)
+			}
+			return
+		}
+	}()
 }
 
 func sortedPeers(reg *offices.Region) []string {

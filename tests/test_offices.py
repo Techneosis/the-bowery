@@ -759,6 +759,35 @@ class Pull(Offices):
                 self.assertEqual(r.returncode, 1, r.stdout)
                 self.assertIn(why, r.stderr)
 
+    WEB = textwrap.dedent("""
+        [bus.web]
+        listen = "100.64.0.1:7450"
+        host   = "node.example.ts.net"
+        owner  = "alice@example.com"
+        origin = "https://board.example.ts.net"
+        seat   = "alice"
+        """)
+
+    def test_bus_web_is_checked_with_the_region(self):
+        self.write_region(self.BUS + self.WEB)
+        self.office_ok("check", self.REVIEWS)
+        for bad, why in [
+            (self.WEB.replace('listen = "100.64.0.1:7450"', 'listen = "100.64.0.1"'), "bus.web.listen"),
+            (self.WEB.replace('listen = "100.64.0.1:7450"', 'listen = ":7450"'), "bus.web.listen"),
+            (self.WEB.replace('listen = "100.64.0.1:7450"', 'listen = "0.0.0.0:7450"'), "bus.web.listen"),
+            (self.WEB.replace('host   = "node.example.ts.net"\n', ''), "bus.web.host"),
+            (self.WEB.replace('owner  = "alice@example.com"\n', ''), "bus.web.owner"),
+            (self.WEB.replace('"https://board.example.ts.net"', '"*"'), "bus.web.origin"),
+            (self.WEB.replace('"https://board.example.ts.net"', '"https://board.example.ts.net/app"'), "bus.web.origin"),
+            (self.WEB.replace('seat   = "alice"', 'seat = "bob"'), "bus.web.seat: bob has no [bus.seats.bob]"),
+            (self.WEB + 'cert = "/x.pem"\n', "unknown"),
+        ]:
+            with self.subTest(why=why):
+                self.write_region(self.BUS + bad)
+                r = self.office("check", self.REVIEWS)
+                self.assertEqual(r.returncode, 1, r.stdout)
+                self.assertIn(why, r.stderr)
+
     def test_the_machine_file_must_name_this_machine(self):
         self.write_machine()
         text = (self.etc / "machine.toml").read_text().replace(f'machine = "{HOST}"', 'machine = "box-1"', 1)
