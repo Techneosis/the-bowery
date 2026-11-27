@@ -917,6 +917,30 @@ it between regions.
   anywhere in it (`bus.NamesPrivate`). Private records are kept like any
   other topic's (30 days by default): a region that wants them kept
   longer says so in `[bus.retain]`.
+- **The private projection, served to its owner's browser.** With a
+  `[bus.web]` in the region file, `office bus serve` also serves HTTPS on
+  one tailnet address (`listen`, never every address): `GET
+  /private/snapshot` (the fold, its cursor the node's heads, and a CSRF
+  token), `GET /private/stream` (server-sent events: the snapshot, or
+  `ready` for a reader whose `?cursor=` or `Last-Event-ID` is current,
+  then a `change` per change, `{cursor, put, drop}`, woken by the publish
+  itself), and `POST /private/publish` (`{kind, data}`, a private topic
+  only, checked by `bus.CheckPrivate`, published as `seat`). A board on
+  another origin draws it beside its own shared data, and nothing private
+  passes through the board's server. Who's asking is settled before
+  anything is read: the Host must be the node's own name (`host`; a
+  rebound name gets 421), an `Origin` must be the board's exactly
+  (`origin`; a write must send one), and tailscaled's whois must say the
+  caller is the `owner` login on an untagged device, so a peer region's
+  node, a server or anyone else gets 403. A write also carries the CSRF
+  token the node minted for that login (an HMAC, twelve hours, a fresh
+  key each start). CORS answers `origin` alone, never `*`, and allows no
+  credentials: whois is the identity, so there's no cookie. The
+  certificate is tailscaled's for `host`, fetched over its LocalAPI
+  (which needs root, the operator, or `TS_PERMIT_CERT_UID` for the
+  node's user), kept in `<var>/bus/web.pem` and renewed a month before
+  its end. A listen that fails at boot, before the tailnet is up, is
+  tried again every five seconds; the bus runs on meanwhile.
 - **Retention per topic.** Events are kept 30 days unless `[bus] retention`
   or a pattern in `[bus.retain]` says otherwise (the most specific pattern
   wins). Compaction rewrites a producer's log without what's past its time

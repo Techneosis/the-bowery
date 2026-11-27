@@ -59,6 +59,18 @@ private   = ["private.*"]     # never sent to a peer, whatever its may_read; no 
 publish = ["job.*", "private.*"]
 read    = ["card.answered", "private.*"]
 
+# The private projection over HTTPS, for the owner's browser only (leave it
+# out and the node serves no web at all). tailscaled gives the certificate
+# for host and says who each caller is; only owner, on an untagged device,
+# is served, and only pages on origin may read or write.
+[bus.web]
+listen = "100.64.0.1:7450"                # this machine's tailnet address; never 0.0.0.0
+host   = "node-a.example.ts.net"          # its tailnet name: the certificate's, the only Host served
+owner  = "alice@example.com"              # the tailnet login served
+origin = "https://board.example.ts.net"   # the board that reads it: CORS and the Origin check
+seat   = "alice"                          # the seat a browser reads and publishes as
+# tailscaled = "/run/tailscale/tailscaled.sock"  # the default
+
 # Rule instances every office in the region carries:
 # [[defaults.rules]]
 # name   = "region-hours"
