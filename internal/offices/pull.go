@@ -400,18 +400,28 @@ func Pull(c *Config, ev *Evaluator, t Transport, in Inbox, force bool) (*PullRep
 		}
 		surface := launchSurface(c, j)
 		item := PullItem{ID: j.ID, Surface: surface}
-		code, pgid, lerr := launch(c, j)
+		code, pgid, tail, lerr := launch(c, j)
 		startedAt := Stamp(time.Now())
 		if lerr != nil {
 			if err := Append(c.L, o, Entry{"event": "launch-failed", "job": j.ID, "surface": surface, "why": lerr.Error()}); err != nil {
 				return nil, err
 			}
 			item.Reason = lerr.Error()
+			if err := publishFailed(c, j, surface, nil, tail, lerr.Error()); err != nil {
+				return nil, err
+			}
 		} else {
 			item.Exit = &code
 			if err := Append(c.L, o, Entry{"event": "launched", "job": j.ID, "surface": surface, "exit": code,
 				"stages": stages(j, p, acceptedAt, startedAt)}); err != nil {
 				return nil, err
+			}
+			// A surface that exits non-zero started nothing: say so on the
+			// bus, since no running job will ever report on it.
+			if code != 0 {
+				if err := publishFailed(c, j, surface, &code, tail, ""); err != nil {
+					return nil, err
+				}
 			}
 			// A surface that started its agent (exit 0) leaves a running job,
 			// until the job reports done or the owner stops it.
@@ -480,14 +490,21 @@ func launchSurface(c *Config, j *Job) string {
 	return surface
 }
 
-func launch(c *Config, j *Job) (int, int, error) {
+// launch runs the job's surface: its exit, its process group, and the last
+// line of its stderr (what a failed launch says about why).
+func launch(c *Config, j *Job) (int, int, string, error) {
 	surface := launchSurface(c, j)
 	s, ok := c.Machine.Surfaces[surface]
 	if !ok || len(s.Command) == 0 {
-		return 0, 0, fmt.Errorf("surface %q has no command on this machine", surface)
+		return 0, 0, "", fmt.Errorf("surface %q has no command on this machine", surface)
 	}
 	b, _ := json.Marshal(j)
-	return runSurface(c, s, s.Command, b, j.ID, surface, nil)
+	errf := stderrFile()
+	if errf != nil {
+		defer errf.Close()
+	}
+	code, pgid, err := runSurfaceTo(c, s, s.Command, b, j.ID, surface, nil, errf)
+	return code, pgid, lastLine(errf), err
 }
 
 // NextDue is when the pull loop must look again even with no mail or

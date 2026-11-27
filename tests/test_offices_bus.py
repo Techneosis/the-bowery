@@ -13,6 +13,7 @@ user, so OFFICE_BUS_AS names the seat instead (refused in root mode).
 import json
 import os
 import select
+import sys
 import subprocess
 import textwrap
 import time
@@ -35,8 +36,9 @@ BUS = textwrap.dedent("""
     """)
 
 
-@unittest.skipUnless(_keys.have_ssh_keygen(), "needs ssh-keygen")
-class Bus(Offices):
+class BusNode(Offices):
+    """A region with a bus node: the helpers, no tests of its own."""
+
     def setUp(self):
         super().setUp()
         self.write_region(BUS)
@@ -79,8 +81,10 @@ class Bus(Offices):
     def records(self, out):
         return [json.loads(l) for l in out.splitlines() if l.strip()]
 
-    # ------------------------------------------------------------ tests
 
+
+@unittest.skipUnless(_keys.have_ssh_keygen(), "needs ssh-keygen")
+class Bus(BusNode):
     def test_publish_and_follow(self):
         self.serve()
         out = self.bus_ok("publish", "job.started", "--owner", "alice", "--subject", '{"job":"j-1"}', "--json")
@@ -237,6 +241,79 @@ class Bus(Offices):
         self.sock.write_text("")
         self.serve()
         self.bus_ok("publish", "job.started")
+
+
+FAILING_SURFACE = f"""#!{sys.executable}
+import sys
+sys.stdin.read()
+print("starting the agent", file=sys.stderr)
+print("refused: the conversation is still running elsewhere", file=sys.stderr)
+sys.exit(2)
+"""
+
+
+@unittest.skipUnless(_keys.have_ssh_keygen(), "needs ssh-keygen")
+class LaunchFailed(BusNode):
+    """A surface that exits non-zero leaves no running job, so nothing else
+    would ever say so: pull publishes job.failed on the bus as the office's
+    own seat (job, office, surface, exit, the surface's last stderr line)."""
+
+    def setUp(self):
+        super().setUp()
+        self.write_region(BUS + f'\n[bus.seats.{self.REVIEWS}]\npublish = ["job.failed"]\n')
+
+    def failing_surface(self):
+        self.surface.write_text(FAILING_SURFACE)
+
+    def failed(self):
+        return [r["event"] for r in self.records(self.bus_ok("follow", "--once", "--topic", "job.failed"))]
+
+    def test_a_launch_that_exits_non_zero_publishes_job_failed(self):
+        self.serve()
+        self.failing_surface()
+        self.place("--kind", "review", "--id", "rev-fail", code=0)
+        rep = self.pull()
+        self.assertEqual(rep["accepted"][0]["exit"], 2)
+        self.assertEqual(self.events(self.REVIEWS, "launched")[0]["exit"], 2)
+        got = self.failed()
+        self.assertEqual(len(got), 1, got)
+        ev = got[0]
+        self.assertEqual(ev["producer"], f"region-a/{self.REVIEWS}")
+        self.assertEqual(ev["subject"], {"job": "rev-fail", "office": self.REVIEWS, "kind": "review"})
+        self.assertEqual(ev["data"]["surface"], "reviewer")
+        self.assertEqual(ev["data"]["exit"], 2)
+        self.assertEqual(ev["data"]["stderr"], "refused: the conversation is still running elsewhere")
+        # The office's log says it went out, and which record it is.
+        pub = self.events(self.REVIEWS, "failed-published")
+        self.assertEqual(pub[0]["job"], "rev-fail")
+        self.assertEqual(pub[0]["ref"], f"region-a/{self.REVIEWS}:1")
+        # Nothing is left running for a job that never started.
+        self.assertEqual(self.pull()["accepted"], [])
+
+    def test_a_launch_that_starts_publishes_nothing(self):
+        self.serve()
+        self.place("--kind", "review", "--id", "rev-ok", code=0)
+        self.assertEqual(self.pull()["accepted"][0]["exit"], 0)
+        self.assertEqual(self.failed(), [])
+        self.assertEqual(self.events(self.REVIEWS, "failed-published"), [])
+
+    def test_no_bus_node_is_logged_and_the_pull_goes_on(self):
+        self.failing_surface()
+        self.place("--kind", "review", "--id", "rev-nobus", code=0)
+        self.assertEqual(self.pull()["accepted"][0]["exit"], 2)
+        miss = self.events(self.REVIEWS, "failed-not-published")
+        self.assertEqual(miss[0]["job"], "rev-nobus")
+        self.assertIn("no bus node", miss[0]["why"])
+
+    def test_a_seat_that_may_not_publish_is_logged(self):
+        self.write_region(BUS)
+        self.serve()
+        self.failing_surface()
+        self.place("--kind", "review", "--id", "rev-noseat", code=0)
+        self.pull()
+        miss = self.events(self.REVIEWS, "failed-not-published")
+        self.assertIn("may not publish", miss[0]["why"])
+        self.assertEqual(self.failed(), [])
 
 
 if __name__ == "__main__":
